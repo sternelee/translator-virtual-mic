@@ -1,0 +1,20 @@
+[workspace]
+members = [
+  "crates/common",
+  "crates/metrics",
+  "crates/audio-core",
+  "crates/output-bridge",
+  "crates/session-core",
+  "crates/engine-api",
+  "crates/demo-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Codex"]
+license = "MIT"
+
+[workspace.lints.clippy]
+pedantic = "warn"

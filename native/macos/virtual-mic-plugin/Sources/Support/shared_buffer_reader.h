@@ -1,0 +1,24 @@
+#ifndef TRANSLATOR_VIRTUAL_MIC_SHARED_BUFFER_READER_H
+#define TRANSLATOR_VIRTUAL_MIC_SHARED_BUFFER_READER_H
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "../shared_buffer_protocol.h"
+
+class SharedBufferReader {
+public:
+    explicit SharedBufferReader(std::string file_path = TVM_SHARED_BUFFER_FILE_PATH);
+
+    const std::string &file_path() const;
+    bool read_header(TvmSharedBufferHeader &header) const;
+    std::size_t read_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const;
+    std::vector<float> read_all_samples(TvmSharedBufferHeader &header) const;
+
+private:
+    std::string file_path_;
+};
+
+#endif

@@ -1,0 +1,9 @@
+[package]
+name = "demo-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+session-core = { path = "../session-core" }

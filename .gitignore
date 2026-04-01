@@ -1,0 +1,9 @@
+/target
+.DS_Store
+.build
+**/.build
+DerivedData
+*.dylib
+*.so
+*.dll
+native/macos/build/

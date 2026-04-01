@@ -1,0 +1,24 @@
+[audio]
+input_sample_rate = 48000
+internal_asr_rate = 16000
+tts_output_rate = 48000
+channels = 1
+frame_ms = 20
+
+[pipeline]
+enable_vad = true
+max_partial_latency_ms = 250
+max_tts_buffer_ms = 300
+fallback_mode = "bypass"
+
+[languages]
+source = "auto"
+target = "en"
+
+[virtual_device]
+name = "Translator Virtual Mic"
+preferred_sample_rate = 48000
+
+[observability]
+metrics_enabled = true
+log_level = "info"
