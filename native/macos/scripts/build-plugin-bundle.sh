@@ -28,5 +28,9 @@ clang++ -std=c++17 -x objective-c++ -isysroot "$SDKROOT" -bundle \
 cp "$PLUGIN_RES/Info.plist" "$CONTENTS_ROOT/Info.plist"
 cp "$PLUGIN_RES/Localizable.strings" "$RES_ROOT/Localizable.strings"
 
+# Sign the fully assembled bundle so the executable, Info.plist, and resources
+# are covered by one coherent signature.
+codesign --force --sign - "$BUNDLE_ROOT"
+
 "$ROOT/native/macos/scripts/validate-plugin-bundle.sh" "$BUNDLE_ROOT"
 find "$BUNDLE_ROOT" -maxdepth 3 -type f | sort

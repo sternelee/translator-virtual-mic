@@ -4,6 +4,8 @@ macOS-first realtime speech translation virtual microphone prototype.
 
 Detailed status and installation notes: `docs/current-status.md`.
 
+Repository status baseline: `2026-04-03`.
+
 ## Scope of this scaffold
 
 This repository implements the narrowest useful chain for Milestone 1 and the start of Milestone 2:
@@ -17,6 +19,7 @@ This repository implements the narrowest useful chain for Milestone 1 and the st
 - SwiftUI host scaffold with microphone permission flow and device enumeration
 - Swift microphone capture scaffold that pushes PCM into Rust
 - Shared-buffer contract placeholder for a future Audio Server Plug-in
+- Signed `.driver` bundle scaffold plus host-side HAL verifier
 
 ## Current status
 
@@ -33,6 +36,9 @@ Implemented now:
 - `engine_get_last_error`
 - `engine_get_metrics_json`
 - checked-in C header at `native/macos/ffi-headers/engine_api.h`
+- HAL bundle packaging, signing, and verifier scaffolding
+- `AudioServerPlugIn_Create` export for the plug-in bundle
+- local COM-layout validation for `AudioServerPlugInDriverRef`
 
 Current dev shared output path:
 
@@ -41,7 +47,7 @@ Current dev shared output path:
 Deferred:
 
 - VAD / ASR / MT / TTS
-- actual Audio Server Driver Plug-in implementation
+- HAL-acceptable Audio Server Plug-in implementation that macOS will enumerate
 - production-safe realtime threading and lock-free buffers
 - codesigning / installer workflows
 
@@ -61,6 +67,7 @@ Deferred:
 cargo check
 cargo run -p demo-cli
 ./native/macos/scripts/build-hal-smoke-verifier.sh
+./native/macos/scripts/build-plugin-bundle.sh
 ```
 
 ## HAL Smoke Verifier
@@ -74,6 +81,13 @@ Use `--allow-missing` before installation, or `--no-strict` if you only want a p
 ./native/macos/scripts/run-hal-smoke-verifier.sh --uid translator.virtual.mic.device --no-strict
 ./native/macos/scripts/run-hal-smoke-verifier.sh --list
 ```
+
+Current real-system status:
+
+- the bundle installs to `/Library/Audio/Plug-Ins/HAL`
+- the installed bundle now passes strict signature verification
+- macOS still does not enumerate `translator.virtual.mic.device`
+- the remaining work is in HAL plug-in correctness, not basic install mechanics
 
 ## FFI header
 

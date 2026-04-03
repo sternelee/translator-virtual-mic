@@ -5,12 +5,21 @@
 #include <mach/mach_time.h>
 #include <stddef.h>
 #include <string.h>
+#include <os/log.h>
 
 namespace {
 AudioServerPlugInDriverInterface kDriverInterface = {};
+struct DriverRefStorage {
+    AudioServerPlugInDriverInterface *interface_ptr;
+    TranslatorVirtualMicDriver *driver;
+};
+
+DriverRefStorage kDriverStorage = {&kDriverInterface, nullptr};
+
 constexpr Float64 kNominalSampleRate = 48000.0;
 constexpr UInt32 kChannelCount = 1;
 constexpr UInt32 kZeroTimeStampPeriod = 480;
+constexpr const char *kPluginName = "Translator Virtual Mic Plug-In";
 constexpr const char *kDeviceName = "Translator Virtual Mic";
 constexpr const char *kManufacturerName = "Translator Virtual Mic";
 constexpr const char *kStreamName = "Translator Virtual Mic Stream";
@@ -56,6 +65,22 @@ bool is_input_scope(const AudioObjectPropertyAddress *address) {
 bool is_output_scope(const AudioObjectPropertyAddress *address) {
     return address != nullptr && address->mScope == kAudioObjectPropertyScopeOutput;
 }
+
+bool is_stream_scope(const AudioObjectPropertyAddress *address) {
+    return address != nullptr &&
+        (address->mScope == kAudioObjectPropertyScopeGlobal || address->mScope == kAudioObjectPropertyScopeWildcard);
+}
+
+TranslatorVirtualMicDriver &driver_from_ref(const void *driver_ref) {
+    if (driver_ref == nullptr) {
+        return TranslatorVirtualMicDriver::instance();
+    }
+    const auto *storage = reinterpret_cast<const DriverRefStorage *>(driver_ref);
+    if (storage->driver != nullptr) {
+        return *storage->driver;
+    }
+    return TranslatorVirtualMicDriver::instance();
+}
 } // namespace
 
 TranslatorVirtualMicDriver &TranslatorVirtualMicDriver::instance() {
@@ -66,72 +91,97 @@ TranslatorVirtualMicDriver &TranslatorVirtualMicDriver::instance() {
 AudioServerPlugInDriverInterface *TranslatorVirtualMicDriver::driver_interface() {
     static bool initialized = false;
     if (!initialized) {
+        kDriverStorage.driver = &TranslatorVirtualMicDriver::instance();
         kDriverInterface._reserved = nullptr;
         kDriverInterface.QueryInterface = [](void *in_driver, REFIID in_uuid, LPVOID *out_interface) {
-            return TranslatorVirtualMicDriver::instance().query_interface(in_uuid, out_interface);
+            return driver_from_ref(in_driver).query_interface(in_driver, in_uuid, out_interface);
         };
         kDriverInterface.AddRef = [](void *in_driver) {
-            return TranslatorVirtualMicDriver::instance().add_ref();
+            return driver_from_ref(in_driver).add_ref();
         };
         kDriverInterface.Release = [](void *in_driver) {
-            return TranslatorVirtualMicDriver::instance().release();
+            return driver_from_ref(in_driver).release();
         };
         kDriverInterface.Initialize = [](AudioServerPlugInDriverRef in_driver, AudioServerPlugInHostRef in_host) {
-            return TranslatorVirtualMicDriver::instance().initialize(in_host);
+            return driver_from_ref(in_driver).initialize(in_host);
         };
         kDriverInterface.CreateDevice = [](AudioServerPlugInDriverRef in_driver, CFDictionaryRef in_description, const AudioServerPlugInClientInfo *in_client_info, AudioObjectID *out_device_object_id) {
-            return TranslatorVirtualMicDriver::instance().create_device(out_device_object_id);
+            return driver_from_ref(in_driver).create_device(out_device_object_id);
         };
         kDriverInterface.DestroyDevice = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id) {
-            return TranslatorVirtualMicDriver::instance().destroy_device(in_device_object_id);
+            return driver_from_ref(in_driver).destroy_device(in_device_object_id);
         };
         kDriverInterface.AddDeviceClient = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, const AudioServerPlugInClientInfo *in_client_info) {
-            return TranslatorVirtualMicDriver::instance().add_device_client(in_device_object_id, in_client_info);
+            return driver_from_ref(in_driver).add_device_client(in_device_object_id, in_client_info);
         };
         kDriverInterface.RemoveDeviceClient = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, const AudioServerPlugInClientInfo *in_client_info) {
-            return TranslatorVirtualMicDriver::instance().remove_device_client(in_device_object_id, in_client_info);
+            return driver_from_ref(in_driver).remove_device_client(in_device_object_id, in_client_info);
         };
         kDriverInterface.PerformDeviceConfigurationChange = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt64 in_change_action, void *in_change_info) {
-            return TranslatorVirtualMicDriver::instance().perform_device_configuration_change(in_device_object_id, in_change_action, in_change_info);
+            return driver_from_ref(in_driver).perform_device_configuration_change(in_device_object_id, in_change_action, in_change_info);
         };
         kDriverInterface.AbortDeviceConfigurationChange = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt64 in_change_action, void *in_change_info) {
-            return TranslatorVirtualMicDriver::instance().abort_device_configuration_change(in_device_object_id, in_change_action, in_change_info);
+            return driver_from_ref(in_driver).abort_device_configuration_change(in_device_object_id, in_change_action, in_change_info);
         };
         kDriverInterface.HasProperty = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_object_id, pid_t in_client_process_id, const AudioObjectPropertyAddress *in_address) {
-            return TranslatorVirtualMicDriver::instance().has_property(in_object_id, in_address);
+            Boolean has = driver_from_ref(in_driver).has_property(in_object_id, in_address);
+            if (!has && in_address != nullptr) {
+                char c1 = (char)((in_address->mSelector >> 24) & 0xFF);
+                char c2 = (char)((in_address->mSelector >> 16) & 0xFF);
+                char c3 = (char)((in_address->mSelector >> 8) & 0xFF);
+                char c4 = (char)(in_address->mSelector & 0xFF);
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: HasProperty returned false for %u ('%c%c%c%c') on object %d", in_address->mSelector, c1, c2, c3, c4, in_object_id);
+            }
+            return has;
         };
         kDriverInterface.IsPropertySettable = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_object_id, pid_t in_client_process_id, const AudioObjectPropertyAddress *in_address, Boolean *out_is_settable) {
-            return TranslatorVirtualMicDriver::instance().is_property_settable(in_object_id, in_address, out_is_settable);
+            return driver_from_ref(in_driver).is_property_settable(in_object_id, in_address, out_is_settable);
         };
         kDriverInterface.GetPropertyDataSize = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_object_id, pid_t in_client_process_id, const AudioObjectPropertyAddress *in_address, UInt32 in_qualifier_data_size, const void *in_qualifier_data, UInt32 *out_data_size) {
-            return TranslatorVirtualMicDriver::instance().get_property_data_size(in_object_id, in_address, in_qualifier_data_size, in_qualifier_data, out_data_size);
+            OSStatus status = driver_from_ref(in_driver).get_property_data_size(in_object_id, in_address, in_qualifier_data_size, in_qualifier_data, out_data_size);
+            if (in_address != nullptr) {
+                char c1 = (char)((in_address->mSelector >> 24) & 0xFF);
+                char c2 = (char)((in_address->mSelector >> 16) & 0xFF);
+                char c3 = (char)((in_address->mSelector >> 8) & 0xFF);
+                char c4 = (char)(in_address->mSelector & 0xFF);
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: GetPropertyDataSize requested %u ('%c%c%c%c') on object %d, returning %d", in_address->mSelector, c1, c2, c3, c4, in_object_id, status);
+            }
+            return status;
         };
         kDriverInterface.GetPropertyData = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_object_id, pid_t in_client_process_id, const AudioObjectPropertyAddress *in_address, UInt32 in_qualifier_data_size, const void *in_qualifier_data, UInt32 in_data_size, UInt32 *out_data_size, void *out_data) {
-            return TranslatorVirtualMicDriver::instance().get_property_data(in_object_id, in_address, in_qualifier_data_size, in_qualifier_data, in_data_size, out_data_size, out_data);
+            OSStatus status = driver_from_ref(in_driver).get_property_data(in_object_id, in_address, in_qualifier_data_size, in_qualifier_data, in_data_size, out_data_size, out_data);
+            if (in_address != nullptr) {
+                char c1 = (char)((in_address->mSelector >> 24) & 0xFF);
+                char c2 = (char)((in_address->mSelector >> 16) & 0xFF);
+                char c3 = (char)((in_address->mSelector >> 8) & 0xFF);
+                char c4 = (char)(in_address->mSelector & 0xFF);
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: GetPropertyData requested %u ('%c%c%c%c') on object %d, returning %d", in_address->mSelector, c1, c2, c3, c4, in_object_id, status);
+            }
+            return status;
         };
         kDriverInterface.SetPropertyData = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_object_id, pid_t in_client_process_id, const AudioObjectPropertyAddress *in_address, UInt32 in_qualifier_data_size, const void *in_qualifier_data, UInt32 in_data_size, const void *in_data) {
-            return TranslatorVirtualMicDriver::instance().set_property_data(in_object_id, in_address, in_data_size, in_data);
+            return driver_from_ref(in_driver).set_property_data(in_object_id, in_address, in_data_size, in_data);
         };
         kDriverInterface.StartIO = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id) {
-            return TranslatorVirtualMicDriver::instance().start_io(in_device_object_id, in_client_id);
+            return driver_from_ref(in_driver).start_io(in_device_object_id, in_client_id);
         };
         kDriverInterface.StopIO = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id) {
-            return TranslatorVirtualMicDriver::instance().stop_io(in_device_object_id, in_client_id);
+            return driver_from_ref(in_driver).stop_io(in_device_object_id, in_client_id);
         };
         kDriverInterface.GetZeroTimeStamp = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id, Float64 *out_sample_time, UInt64 *out_host_time, UInt64 *out_seed) {
-            return TranslatorVirtualMicDriver::instance().get_zero_time_stamp(in_device_object_id, out_sample_time, out_host_time, out_seed);
+            return driver_from_ref(in_driver).get_zero_time_stamp(in_device_object_id, out_sample_time, out_host_time, out_seed);
         };
         kDriverInterface.WillDoIOOperation = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id, UInt32 in_operation_id, Boolean *out_will_do, Boolean *out_will_do_in_place) {
-            return TranslatorVirtualMicDriver::instance().will_do_io_operation(in_device_object_id, in_operation_id, out_will_do, out_will_do_in_place);
+            return driver_from_ref(in_driver).will_do_io_operation(in_device_object_id, in_operation_id, out_will_do, out_will_do_in_place);
         };
         kDriverInterface.BeginIOOperation = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id, UInt32 in_operation_id, UInt32 in_io_buffer_frame_size, const AudioServerPlugInIOCycleInfo *in_io_cycle_info) {
-            return TranslatorVirtualMicDriver::instance().begin_io_operation(in_device_object_id, in_operation_id, in_io_buffer_frame_size, in_io_cycle_info);
+            return driver_from_ref(in_driver).begin_io_operation(in_device_object_id, in_operation_id, in_io_buffer_frame_size, in_io_cycle_info);
         };
         kDriverInterface.DoIOOperation = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, AudioObjectID in_stream_object_id, UInt32 in_client_id, UInt32 in_operation_id, UInt32 in_io_buffer_frame_size, const AudioServerPlugInIOCycleInfo *in_io_cycle_info, void *io_main_buffer, void *io_secondary_buffer) {
-            return TranslatorVirtualMicDriver::instance().do_io_operation(in_device_object_id, in_stream_object_id, in_operation_id, in_io_buffer_frame_size, io_main_buffer, io_secondary_buffer);
+            return driver_from_ref(in_driver).do_io_operation(in_device_object_id, in_stream_object_id, in_operation_id, in_io_buffer_frame_size, io_main_buffer, io_secondary_buffer);
         };
         kDriverInterface.EndIOOperation = [](AudioServerPlugInDriverRef in_driver, AudioObjectID in_device_object_id, UInt32 in_client_id, UInt32 in_operation_id, UInt32 in_io_buffer_frame_size, const AudioServerPlugInIOCycleInfo *in_io_cycle_info) {
-            return TranslatorVirtualMicDriver::instance().end_io_operation(in_device_object_id, in_operation_id, in_io_buffer_frame_size, in_io_cycle_info);
+            return driver_from_ref(in_driver).end_io_operation(in_device_object_id, in_operation_id, in_io_buffer_frame_size, in_io_cycle_info);
         };
         initialized = true;
     }
@@ -146,7 +196,8 @@ TranslatorVirtualMicDriver::TranslatorVirtualMicDriver()
       active_io_clients_(0),
       render_source_(static_cast<uint32_t>(kNominalSampleRate), kChannelCount) {}
 
-HRESULT TranslatorVirtualMicDriver::query_interface(REFIID uuid, LPVOID *out_interface) {
+HRESULT TranslatorVirtualMicDriver::query_interface(void *driver_ref, REFIID uuid, LPVOID *out_interface) {
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: query_interface called");
     if (out_interface == nullptr) {
         return E_POINTER;
     }
@@ -154,7 +205,7 @@ HRESULT TranslatorVirtualMicDriver::query_interface(REFIID uuid, LPVOID *out_int
     const CFUUIDRef driver_uuid = kAudioServerPlugInDriverInterfaceUUID;
     const CFUUIDRef unknown_uuid = IUnknownUUID;
     if (uuid_bytes_equal(uuid, driver_uuid) || uuid_bytes_equal(uuid, unknown_uuid)) {
-        *out_interface = driver_interface();
+        *out_interface = driver_ref != nullptr ? driver_ref : &kDriverStorage;
         add_ref();
         return S_OK;
     }
@@ -220,6 +271,7 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
         case kPluginObjectID:
             return addresses_match_selector(address, kAudioObjectPropertyBaseClass) ||
                 addresses_match_selector(address, kAudioObjectPropertyClass) ||
+                addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
                 addresses_match_selector(address, kAudioObjectPropertyManufacturer) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwnedObjects) ||
@@ -230,12 +282,17 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
         case kDeviceObjectID:
             return addresses_match_selector(address, kAudioObjectPropertyBaseClass) ||
                 addresses_match_selector(address, kAudioObjectPropertyClass) ||
+                addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
                 addresses_match_selector(address, kAudioObjectPropertyName) ||
                 addresses_match_selector(address, kAudioObjectPropertyManufacturer) ||
                 addresses_match_selector(address, kAudioDevicePropertyDeviceUID) ||
                 addresses_match_selector(address, kAudioDevicePropertyModelUID) ||
                 addresses_match_selector(address, kAudioDevicePropertyTransportType) ||
+                addresses_match_selector(address, kAudioDevicePropertyClockDomain) ||
+                addresses_match_selector(address, kAudioDevicePropertyRelatedDevices) ||
+                addresses_match_selector(address, kAudioDevicePropertyIsHidden) ||
+                addresses_match_selector(address, kAudioDevicePropertyPreferredChannelsForStereo) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwnedObjects) ||
                 addresses_match_selector(address, kAudioDevicePropertyStreams) ||
                 addresses_match_selector(address, kAudioDevicePropertyLatency) ||
@@ -254,10 +311,15 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioDevicePropertyHogMode) ||
                 addresses_match_selector(address, kAudioObjectPropertyControlList);
         case kStreamObjectID:
+            if (!is_stream_scope(address)) {
+                return false;
+            }
             return addresses_match_selector(address, kAudioObjectPropertyBaseClass) ||
                 addresses_match_selector(address, kAudioObjectPropertyClass) ||
+                addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
                 addresses_match_selector(address, kAudioObjectPropertyName) ||
+                addresses_match_selector(address, kAudioStreamPropertyIsActive) ||
                 addresses_match_selector(address, kAudioStreamPropertyDirection) ||
                 addresses_match_selector(address, kAudioStreamPropertyStartingChannel) ||
                 addresses_match_selector(address, kAudioStreamPropertyLatency) ||
@@ -265,9 +327,17 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioStreamPropertyVirtualFormat) ||
                 addresses_match_selector(address, kAudioStreamPropertyAvailableVirtualFormats) ||
                 addresses_match_selector(address, kAudioStreamPropertyPhysicalFormat) ||
+                addresses_match_selector(address, kAudioStreamPropertyAvailablePhysicalFormats) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwnedObjects);
-        default:
+        default: {
+            char selector_str[5] = {0};
+            selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
+            selector_str[1] = (char)((address->mSelector >> 16) & 0xFF);
+            selector_str[2] = (char)((address->mSelector >> 8) & 0xFF);
+            selector_str[3] = (char)(address->mSelector & 0xFF);
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: has_property returned false for: '%s' on object %d", selector_str, object_id);
             return false;
+        }
     }
 }
 
@@ -276,6 +346,12 @@ OSStatus TranslatorVirtualMicDriver::is_property_settable(AudioObjectID object_i
         return kAudioHardwareIllegalOperationError;
     }
     if (!has_property(object_id, address)) {
+        char selector_str[5] = {0};
+        selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
+        selector_str[1] = (char)((address->mSelector >> 16) & 0xFF);
+        selector_str[2] = (char)((address->mSelector >> 8) & 0xFF);
+        selector_str[3] = (char)(address->mSelector & 0xFF);
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: unknown property requested: '%s' for object %d", selector_str, object_id);
         return kAudioHardwareUnknownPropertyError;
     }
     *out_is_settable = object_id == kDeviceObjectID && addresses_match_selector(address, kAudioDevicePropertyNominalSampleRate);
@@ -287,12 +363,21 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
         return kAudioHardwareIllegalOperationError;
     }
     if (!has_property(object_id, address)) {
+        char selector_str[5] = {0};
+        selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
+        selector_str[1] = (char)((address->mSelector >> 16) & 0xFF);
+        selector_str[2] = (char)((address->mSelector >> 8) & 0xFF);
+        selector_str[3] = (char)(address->mSelector & 0xFF);
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: unknown property requested: '%s' for object %d", selector_str, object_id);
         return kAudioHardwareUnknownPropertyError;
     }
 
     switch (address->mSelector) {
         case kAudioPlugInPropertyDeviceList:
             *out_data_size = sizeof(AudioObjectID);
+            break;
+        case kAudioObjectPropertyCustomPropertyInfoList:
+            *out_data_size = 0;
             break;
         case kAudioObjectPropertyOwnedObjects:
             if (object_id == kPluginObjectID || object_id == kDeviceObjectID) {
@@ -324,6 +409,7 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
             *out_data_size = sizeof(AudioValueRange);
             break;
         case kAudioStreamPropertyAvailableVirtualFormats:
+        case kAudioStreamPropertyAvailablePhysicalFormats:
             *out_data_size = sizeof(AudioStreamRangedDescription);
             break;
         case kAudioDevicePropertyNominalSampleRate:
@@ -334,6 +420,7 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
             break;
         case kAudioDevicePropertyZeroTimeStampPeriod:
         case kAudioDevicePropertyTransportType:
+        case kAudioDevicePropertyClockDomain:
         case kAudioDevicePropertyLatency:
         case kAudioDevicePropertySafetyOffset:
         case kAudioDevicePropertyDeviceHasChanged:
@@ -348,10 +435,14 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
         case kAudioStreamPropertyDirection:
         case kAudioStreamPropertyTerminalType:
+        case kAudioStreamPropertyIsActive:
             *out_data_size = sizeof(UInt32);
             break;
         case kAudioDevicePropertyHogMode:
             *out_data_size = sizeof(pid_t);
+            break;
+        case kAudioDevicePropertyPreferredChannelsForStereo:
+            *out_data_size = 2 * sizeof(UInt32);
             break;
         case kAudioObjectPropertyName:
         case kAudioObjectPropertyManufacturer:
@@ -364,8 +455,21 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
         case kAudioStreamPropertyPhysicalFormat:
             *out_data_size = sizeof(AudioStreamBasicDescription);
             break;
-        default:
+        case kAudioDevicePropertyRelatedDevices:
+            *out_data_size = sizeof(AudioObjectID);
+            break;
+        case kAudioDevicePropertyIsHidden:
+            *out_data_size = sizeof(UInt32);
+            break;
+        default: {
+            char selector_str[5] = {0};
+            selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
+            selector_str[1] = (char)((address->mSelector >> 16) & 0xFF);
+            selector_str[2] = (char)((address->mSelector >> 8) & 0xFF);
+            selector_str[3] = (char)(address->mSelector & 0xFF);
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: get_property_data_size missing in switch: '%s' for object %d", selector_str, object_id);
             return kAudioHardwareUnknownPropertyError;
+        }
     }
     return kAudioHardwareNoError;
 }
@@ -415,6 +519,13 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<AudioObjectID *>(out_data) = kDeviceObjectID;
             break;
         }
+        case kAudioObjectPropertyCustomPropertyInfoList: {
+            break;
+        }
+        case kAudioDevicePropertyRelatedDevices: {
+            *reinterpret_cast<AudioObjectID *>(out_data) = kDeviceObjectID;
+            break;
+        }
         case kAudioObjectPropertyOwnedObjects: {
             if (required_size > 0) {
                 *reinterpret_cast<AudioObjectID *>(out_data) = (object_id == kPluginObjectID) ? kDeviceObjectID : kStreamObjectID;
@@ -436,6 +547,10 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
         }
         case kAudioDevicePropertyTransportType: {
             *reinterpret_cast<UInt32 *>(out_data) = kAudioDeviceTransportTypeVirtual;
+            break;
+        }
+        case kAudioDevicePropertyClockDomain: {
+            *reinterpret_cast<UInt32 *>(out_data) = 0;
             break;
         }
         case kAudioDevicePropertyAvailableNominalSampleRates: {
@@ -472,6 +587,9 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
         case kAudioDevicePropertyDeviceCanBeDefaultDevice:
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: {
             UInt32 value = 1;
+            if (address->mSelector == kAudioDevicePropertyDeviceCanBeDefaultSystemDevice) {
+                value = 0;
+            }
             if (address->mSelector == kAudioDevicePropertyDeviceIsRunning ||
                 address->mSelector == kAudioDevicePropertyDeviceIsRunningSomewhere) {
                 value = is_running() ? 1U : 0U;
@@ -483,7 +601,21 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<pid_t *>(out_data) = -1;
             break;
         }
+        case kAudioDevicePropertyIsHidden: {
+            *reinterpret_cast<UInt32 *>(out_data) = 0;
+            break;
+        }
+        case kAudioDevicePropertyPreferredChannelsForStereo: {
+            auto *channels = reinterpret_cast<UInt32 *>(out_data);
+            channels[0] = 1;
+            channels[1] = 1;
+            break;
+        }
         case kAudioStreamPropertyDirection: {
+            *reinterpret_cast<UInt32 *>(out_data) = 1;
+            break;
+        }
+        case kAudioStreamPropertyIsActive: {
             *reinterpret_cast<UInt32 *>(out_data) = 1;
             break;
         }
@@ -503,7 +635,8 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<AudioStreamBasicDescription *>(out_data) = make_mono_float_format();
             break;
         }
-        case kAudioStreamPropertyAvailableVirtualFormats: {
+        case kAudioStreamPropertyAvailableVirtualFormats:
+        case kAudioStreamPropertyAvailablePhysicalFormats: {
             auto *desc = reinterpret_cast<AudioStreamRangedDescription *>(out_data);
             memset(desc, 0, sizeof(AudioStreamRangedDescription));
             desc->mFormat = make_mono_float_format();
@@ -522,7 +655,13 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             break;
         }
         case kAudioObjectPropertyName: {
-            *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(object_id == kStreamObjectID ? kStreamName : kDeviceName);
+            const char *name = kDeviceName;
+            if (object_id == kPluginObjectID) {
+                name = kPluginName;
+            } else if (object_id == kStreamObjectID) {
+                name = kStreamName;
+            }
+            *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(name);
             break;
         }
         case kAudioObjectPropertyManufacturer: {
@@ -541,8 +680,15 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(kResourceBundleName);
             break;
         }
-        default:
+        default: {
+            char selector_str[5] = {0};
+            selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
+            selector_str[1] = (char)((address->mSelector >> 16) & 0xFF);
+            selector_str[2] = (char)((address->mSelector >> 8) & 0xFF);
+            selector_str[3] = (char)(address->mSelector & 0xFF);
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: get_property_data missing in switch: '%s' for object %d", selector_str, object_id);
             return kAudioHardwareUnknownPropertyError;
+        }
     }
 
     *out_data_size = required_size;
@@ -676,9 +822,13 @@ void TranslatorVirtualMicDriver::notify_device_configuration_changed() const {
     static_cast<void>(notify_properties_changed(kDeviceObjectID, 5, addresses));
 }
 
-extern "C" void *TranslatorVirtualMicFactory(CFAllocatorRef allocator, CFUUIDRef type_uuid) {
+extern "C" void *AudioServerPlugIn_Create(CFAllocatorRef allocator, CFUUIDRef type_uuid) {
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create called");
     if (type_uuid == nullptr || !CFEqual(type_uuid, kAudioServerPlugInTypeUUID)) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create failed UUID check");
         return nullptr;
     }
-    return TranslatorVirtualMicDriver::driver_interface();
+    TranslatorVirtualMicDriver::driver_interface();
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create returning success");
+    return &kDriverStorage;
 }

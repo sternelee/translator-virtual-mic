@@ -16,7 +16,7 @@ public:
     static constexpr AudioObjectID kDeviceObjectID = 2;
     static constexpr AudioObjectID kStreamObjectID = 3;
 
-    HRESULT query_interface(REFIID uuid, LPVOID *out_interface);
+    HRESULT query_interface(void *driver_ref, REFIID uuid, LPVOID *out_interface);
     ULONG add_ref();
     ULONG release();
 
@@ -60,6 +60,6 @@ private:
     TranslatorVirtualMicRenderSource render_source_;
 };
 
-extern "C" void *TranslatorVirtualMicFactory(CFAllocatorRef allocator, CFUUIDRef type_uuid);
+extern "C" void *AudioServerPlugIn_Create(CFAllocatorRef allocator, CFUUIDRef type_uuid);
 
 #endif

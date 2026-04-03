@@ -22,6 +22,13 @@ void require_status(OSStatus status, const char *message) {
 
 int main() {
     auto &driver = TranslatorVirtualMicDriver::instance();
+    AudioServerPlugInDriverRef driver_ref = reinterpret_cast<AudioServerPlugInDriverRef>(AudioServerPlugIn_Create(nullptr, kAudioServerPlugInTypeUUID));
+    require(driver_ref != nullptr, "factory did not return a driver ref");
+
+    void *queried_interface = nullptr;
+    require(driver.query_interface(driver_ref, CFUUIDGetUUIDBytes(kAudioServerPlugInDriverInterfaceUUID), &queried_interface) == S_OK, "query interface failed");
+    require(queried_interface == driver_ref, "query interface did not return the driver ref");
+    std::cout << "factory_driver_ref_ok=1" << std::endl;
 
     AudioObjectPropertyAddress streams_input = {
         kAudioDevicePropertyStreams,
@@ -53,6 +60,11 @@ int main() {
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
+    AudioObjectPropertyAddress plugin_custom_property_info_list = {
+        kAudioObjectPropertyCustomPropertyInfoList,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
     AudioObjectPropertyAddress stream_owned_objects = {
         kAudioObjectPropertyOwnedObjects,
         kAudioObjectPropertyScopeGlobal,
@@ -78,6 +90,11 @@ int main() {
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
+    AudioObjectPropertyAddress device_can_be_default_system_device = {
+        kAudioDevicePropertyDeviceCanBeDefaultSystemDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
     AudioObjectPropertyAddress translate_uid = {
         kAudioPlugInPropertyTranslateUIDToDevice,
         kAudioObjectPropertyScopeGlobal,
@@ -92,6 +109,10 @@ int main() {
     require_status(driver.get_property_data_size(TranslatorVirtualMicDriver::kDeviceObjectID, &streams_output, 0, nullptr, &size), "output streams size");
     std::cout << "output_streams_size=" << size << std::endl;
     require(size == 0, "unexpected output stream size");
+
+    require_status(driver.get_property_data_size(TranslatorVirtualMicDriver::kPluginObjectID, &plugin_custom_property_info_list, 0, nullptr, &size), "custom property info list size");
+    std::cout << "custom_property_info_list_size=" << size << std::endl;
+    require(size == 0, "custom property info list should be empty");
 
     require_status(driver.get_property_data_size(TranslatorVirtualMicDriver::kDeviceObjectID, &device_control_list, 0, nullptr, &size), "device control list size");
     std::cout << "device_control_list_size=" << size << std::endl;
@@ -157,6 +178,11 @@ int main() {
     require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &hog_mode, 0, nullptr, sizeof(hog_mode_value), &out_size, &hog_mode_value), "hog mode");
     std::cout << "hog_mode=" << hog_mode_value << std::endl;
     require(hog_mode_value == -1, "hog mode should be unowned");
+
+    UInt32 can_be_default_system_device = 99;
+    require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &device_can_be_default_system_device, 0, nullptr, sizeof(can_be_default_system_device), &out_size, &can_be_default_system_device), "device can be default system device");
+    std::cout << "device_can_be_default_system_device=" << can_be_default_system_device << std::endl;
+    require(can_be_default_system_device == 0, "input-only virtual mic should not be a default system output device");
 
     require_status(driver.stop_io(TranslatorVirtualMicDriver::kDeviceObjectID, 1), "stop io");
     require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &device_is_running, 0, nullptr, sizeof(running_value), &out_size, &running_value), "device running after stop");

@@ -14,8 +14,14 @@
   <string>Translator Virtual Mic</string>
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>MacOSX</string>
+  </array>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFPlugInDynamicRegistration</key>
@@ -23,7 +29,7 @@
   <key>CFPlugInFactories</key>
   <dict>
     <key>7B8F4F8A-7D77-4D24-8D56-2B8A54BCE011</key>
-    <string>TranslatorVirtualMicFactory</string>
+    <string>AudioServerPlugIn_Create</string>
   </dict>
   <key>CFPlugInTypes</key>
   <dict>
@@ -32,6 +38,8 @@
       <string>7B8F4F8A-7D77-4D24-8D56-2B8A54BCE011</string>
     </array>
   </dict>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright 2026</string>
 </dict>

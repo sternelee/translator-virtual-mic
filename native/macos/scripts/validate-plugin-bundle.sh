@@ -9,7 +9,7 @@ EXPECTED_BUNDLE_ID="run.clawd.translator-virtual-mic.driver"
 EXPECTED_EXECUTABLE="TranslatorVirtualMic"
 EXPECTED_FACTORY_UUID="7B8F4F8A-7D77-4D24-8D56-2B8A54BCE011"
 EXPECTED_TYPE_UUID="443ABAB8-E7B3-491A-B985-BEB9187030DB"
-EXPECTED_FACTORY_SYMBOL="TranslatorVirtualMicFactory"
+EXPECTED_FACTORY_SYMBOL="AudioServerPlugIn_Create"
 
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "missing plist: $INFO_PLIST" >&2
@@ -37,6 +37,7 @@ plugin_type_entry="$(/usr/libexec/PlistBuddy -c "Print :CFPlugInTypes:$EXPECTED_
 [[ "$plugin_type_entry" == "$EXPECTED_FACTORY_UUID" ]] || { echo "unexpected plugin type mapping: $plugin_type_entry" >&2; exit 1; }
 
 file "$EXECUTABLE" | grep -q 'Mach-O 64-bit bundle'
+codesign --verify --deep --strict --verbose=4 "$BUNDLE_ROOT" >/dev/null
 
 echo "bundle_root=$BUNDLE_ROOT"
 echo "bundle_id=$bundle_id"
