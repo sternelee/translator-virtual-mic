@@ -236,15 +236,20 @@ ULONG TranslatorVirtualMicDriver::release() {
 }
 
 OSStatus TranslatorVirtualMicDriver::initialize(AudioServerPlugInHostRef host) {
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: initialize called with host=%p", host);
     host_ = host;
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: initialize returning success");
     return kAudioHardwareNoError;
 }
 
 OSStatus TranslatorVirtualMicDriver::create_device(AudioObjectID *out_device_object_id) const {
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: create_device called");
     if (out_device_object_id == nullptr) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: create_device failed - null pointer");
         return kAudioHardwareIllegalOperationError;
     }
     *out_device_object_id = kDeviceObjectID;
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: create_device returning device_id=%u", kDeviceObjectID);
     return kAudioHardwareNoError;
 }
 
@@ -878,12 +883,18 @@ void TranslatorVirtualMicDriver::notify_device_configuration_changed() const {
 }
 
 extern "C" void *AudioServerPlugIn_Create(CFAllocatorRef allocator, CFUUIDRef type_uuid) {
-    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create called");
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create called with type_uuid=%p", type_uuid);
     if (type_uuid == nullptr || !CFEqual(type_uuid, kAudioServerPlugInTypeUUID)) {
         os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create failed UUID check");
         return nullptr;
     }
+
+    // Initialize the driver interface
     TranslatorVirtualMicDriver::driver_interface();
-    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create returning success");
-    return &kDriverStorage;
+
+    // Return the driver reference (which will be passed to all callbacks)
+    // This is the reference that gets passed as the first arg to all driver methods
+    void *result = static_cast<void*>(&kDriverStorage);
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: AudioServerPlugIn_Create returning driver_ref=%p", result);
+    return result;
 }

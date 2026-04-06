@@ -24,6 +24,16 @@
   </array>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>AudioServerPlugIn_LoadingConditions</key>
+  <dict>
+    <key>IOService Matching</key>
+    <array>
+      <dict>
+        <key>IOProviderClass</key>
+        <string>IOPlatformExpertDevice</string>
+      </dict>
+    </array>
+  </dict>
   <key>CFPlugInDynamicRegistration</key>
   <false/>
   <key>CFPlugInFactories</key>

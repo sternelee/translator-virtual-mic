@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use common::{AudioFrame, EngineError, Result};
 
-pub const SHARED_BUFFER_MAGIC: u32 = 0x5456_4D31;
+pub const SHARED_BUFFER_MAGIC: u32 = 0x314D_5654;
 pub const SHARED_BUFFER_VERSION: u32 = 1;
 pub const SHARED_BUFFER_FILE_PATH: &str = "/tmp/translator_virtual_mic/shared_output.bin";
 
