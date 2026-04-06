@@ -11,6 +11,7 @@ struct TranslatorVirtualMicRenderResult {
     std::size_t frames_produced;
     std::size_t frames_silence_filled;
     std::uint64_t timestamp_ns;
+    bool source_available;
     bool format_matches;
 };
 

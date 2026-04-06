@@ -20,6 +20,7 @@ TranslatorVirtualMicRenderResult TranslatorVirtualMicRenderSource::render(float 
     result.frames_produced = 0;
     result.frames_silence_filled = max_frames;
     result.timestamp_ns = 0;
+    result.source_available = false;
     result.format_matches = false;
 
     if (out_samples == nullptr || max_frames == 0) {
@@ -32,6 +33,7 @@ TranslatorVirtualMicRenderResult TranslatorVirtualMicRenderSource::render(float 
         return result;
     }
 
+    result.source_available = true;
     result.format_matches = validate_format(header);
     if (!result.format_matches) {
         std::fill(out_samples, out_samples + max_frames, 0.0f);
@@ -39,7 +41,7 @@ TranslatorVirtualMicRenderResult TranslatorVirtualMicRenderSource::render(float 
         return result;
     }
 
-    result.frames_produced = reader_.read_mono_frames(out_samples, max_frames, result.timestamp_ns);
+    result.frames_produced = reader_.consume_mono_frames(out_samples, max_frames, result.timestamp_ns);
     result.frames_silence_filled = max_frames > result.frames_produced ? max_frames - result.frames_produced : 0;
     return result;
 }

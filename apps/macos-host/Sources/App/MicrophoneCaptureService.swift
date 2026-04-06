@@ -86,12 +86,18 @@ final class MicrophoneCaptureService: NSObject, AVCaptureAudioDataOutputSampleBu
             position: .unspecified
         ).devices
 
+        // Debug: log all available devices
+        NSLog("MicrophoneCapture: Available AVCapture devices: \(devices.map { "\($0.localizedName)(\($0.uniqueID))" })")
+        NSLog("MicrophoneCapture: Looking for deviceUID: \(deviceUID ?? "nil")")
+
         if let deviceUID,
            let matched = devices.first(where: { $0.uniqueID == deviceUID }) {
+            NSLog("MicrophoneCapture: Found matching device: \(matched.localizedName)")
             return matched
         }
 
         if let fallback = AVCaptureDevice.default(for: .audio) ?? devices.first {
+            NSLog("MicrophoneCapture: Using fallback device: \(fallback.localizedName) (\(fallback.uniqueID))")
             return fallback
         }
 
@@ -151,6 +157,12 @@ final class MicrophoneCaptureService: NSObject, AVCaptureAudioDataOutputSampleBu
         )
         let monoSamples = mixToMono(interleavedSamples, channelCount: channelCount)
         let rmsLevel = rms(samples: monoSamples)
+
+        // Debug: print first few samples
+        if monoSamples.count >= 5 {
+            let sampleStr = monoSamples.prefix(5).map { String(format: "%.6f", $0) }.joined(separator: ", ")
+            NSLog("MicrophoneCapture: frames=\(frameCount) ch=\(channelCount) rate=\(sampleRate) rms=\(String(format: "%.6f", rmsLevel)) samples=[\(sampleStr)...]")
+        }
 
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let timestampNs = UInt64((CMTimeGetSeconds(timestamp) * 1_000_000_000).rounded())

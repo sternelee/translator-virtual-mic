@@ -55,6 +55,9 @@ struct ContentView: View {
                         .font(.system(.footnote, design: .monospaced))
                         .textSelection(.enabled)
                 }
+                Text(viewModel.sharedBufferStatusText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
                 Text(viewModel.metricsJSON)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)

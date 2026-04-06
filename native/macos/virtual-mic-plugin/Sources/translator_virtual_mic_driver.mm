@@ -26,6 +26,15 @@ constexpr const char *kStreamName = "Translator Virtual Mic Stream";
 constexpr const char *kDeviceUID = "translator.virtual.mic.device";
 constexpr const char *kModelUID = "translator.virtual.mic.model";
 constexpr const char *kResourceBundleName = "Resources";
+constexpr AudioObjectPropertySelector kPropertyListenerRemoved = 'lisr';
+constexpr AudioObjectPropertySelector kPropertyTapList = 'taps';
+
+enum RenderState : UInt32 {
+    kRenderStateUnavailable = 0,
+    kRenderStateFormatMismatch = 1,
+    kRenderStateSilence = 2,
+    kRenderStateFlowing = 3,
+};
 
 CFStringRef copy_cf_string(const char *value) {
     return CFStringCreateWithCString(kCFAllocatorDefault, value, kCFStringEncodingUTF8);
@@ -194,6 +203,7 @@ TranslatorVirtualMicDriver::TranslatorVirtualMicDriver()
       zero_timestamp_seed_(1),
       sample_time_(0),
       active_io_clients_(0),
+      last_render_state_(kRenderStateUnavailable),
       render_source_(static_cast<uint32_t>(kNominalSampleRate), kChannelCount) {}
 
 HRESULT TranslatorVirtualMicDriver::query_interface(void *driver_ref, REFIID uuid, LPVOID *out_interface) {
@@ -309,7 +319,9 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioDevicePropertyZeroTimeStampPeriod) ||
                 addresses_match_selector(address, kAudioDevicePropertyClockIsStable) ||
                 addresses_match_selector(address, kAudioDevicePropertyHogMode) ||
-                addresses_match_selector(address, kAudioObjectPropertyControlList);
+                addresses_match_selector(address, kAudioObjectPropertyControlList) ||
+                addresses_match_selector(address, kPropertyListenerRemoved) ||
+                addresses_match_selector(address, kPropertyTapList);
         case kStreamObjectID:
             if (!is_stream_scope(address)) {
                 return false;
@@ -328,7 +340,8 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioStreamPropertyAvailableVirtualFormats) ||
                 addresses_match_selector(address, kAudioStreamPropertyPhysicalFormat) ||
                 addresses_match_selector(address, kAudioStreamPropertyAvailablePhysicalFormats) ||
-                addresses_match_selector(address, kAudioObjectPropertyOwnedObjects);
+                addresses_match_selector(address, kAudioObjectPropertyOwnedObjects) ||
+                addresses_match_selector(address, kPropertyTapList);
         default: {
             char selector_str[5] = {0};
             selector_str[0] = (char)((address->mSelector >> 24) & 0xFF);
@@ -390,6 +403,7 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
             *out_data_size = is_output_scope(address) ? 0 : sizeof(AudioObjectID);
             break;
         case kAudioObjectPropertyControlList:
+        case kPropertyTapList:
             *out_data_size = 0;
             break;
         case kAudioObjectPropertyBaseClass:
@@ -425,6 +439,7 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
         case kAudioDevicePropertySafetyOffset:
         case kAudioDevicePropertyDeviceHasChanged:
         case kAudioStreamPropertyStartingChannel:
+        case kPropertyListenerRemoved:
             *out_data_size = sizeof(UInt32);
             break;
         case kAudioDevicePropertyClockIsStable:
@@ -580,6 +595,10 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<UInt32 *>(out_data) = 0;
             break;
         }
+        case kPropertyListenerRemoved: {
+            *reinterpret_cast<UInt32 *>(out_data) = 0;
+            break;
+        }
         case kAudioDevicePropertyClockIsStable:
         case kAudioDevicePropertyDeviceIsAlive:
         case kAudioDevicePropertyDeviceIsRunning:
@@ -714,10 +733,13 @@ OSStatus TranslatorVirtualMicDriver::set_property_data(AudioObjectID object_id, 
 
 OSStatus TranslatorVirtualMicDriver::start_io(AudioObjectID device_object_id, UInt32 client_id) {
     if (device_object_id != kDeviceObjectID) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: StartIO rejected unknown device=%u client=%u", device_object_id, client_id);
         return kAudioHardwareBadObjectError;
     }
     const bool was_running = is_running();
     ++active_io_clients_;
+    const UInt32 clients = io_client_count();
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: StartIO device=%u client=%u active_clients=%u", device_object_id, client_id, clients);
     if (!was_running && is_running()) {
         notify_io_state_changed();
     }
@@ -726,12 +748,15 @@ OSStatus TranslatorVirtualMicDriver::start_io(AudioObjectID device_object_id, UI
 
 OSStatus TranslatorVirtualMicDriver::stop_io(AudioObjectID device_object_id, UInt32 client_id) {
     if (device_object_id != kDeviceObjectID) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: StopIO rejected unknown device=%u client=%u", device_object_id, client_id);
         return kAudioHardwareBadObjectError;
     }
     const bool was_running = is_running();
     if (active_io_clients_ > 0) {
         --active_io_clients_;
     }
+    const UInt32 clients = io_client_count();
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: StopIO device=%u client=%u active_clients=%u", device_object_id, client_id, clients);
     if (was_running && !is_running()) {
         notify_io_state_changed();
     }
@@ -750,21 +775,30 @@ OSStatus TranslatorVirtualMicDriver::get_zero_time_stamp(AudioObjectID device_ob
 
 OSStatus TranslatorVirtualMicDriver::will_do_io_operation(AudioObjectID device_object_id, UInt32 operation_id, Boolean *out_will_do, Boolean *out_will_do_in_place) const {
     if (device_object_id != kDeviceObjectID || out_will_do == nullptr || out_will_do_in_place == nullptr) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: WillDoIOOperation invalid args device=%u op=%u", device_object_id, operation_id);
         return kAudioHardwareIllegalOperationError;
     }
     *out_will_do = (operation_id == kAudioServerPlugInIOOperationReadInput);
     *out_will_do_in_place = true;
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: WillDoIOOperation device=%u op=%u will_do=%{public}s in_place=%{public}s", device_object_id, operation_id, *out_will_do ? "true" : "false", *out_will_do_in_place ? "true" : "false");
     return kAudioHardwareNoError;
 }
 
 OSStatus TranslatorVirtualMicDriver::begin_io_operation(AudioObjectID device_object_id, UInt32 operation_id, UInt32 io_buffer_frame_size, const AudioServerPlugInIOCycleInfo *io_cycle_info) const {
-    return device_object_id == kDeviceObjectID ? kAudioHardwareNoError : kAudioHardwareBadObjectError;
+    if (device_object_id != kDeviceObjectID) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: BeginIOOperation rejected unknown device=%u op=%u frames=%u", device_object_id, operation_id, io_buffer_frame_size);
+        return kAudioHardwareBadObjectError;
+    }
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: BeginIOOperation device=%u op=%u frames=%u", device_object_id, operation_id, io_buffer_frame_size);
+    return kAudioHardwareNoError;
 }
 
 OSStatus TranslatorVirtualMicDriver::do_io_operation(AudioObjectID device_object_id, AudioObjectID stream_object_id, UInt32 operation_id, UInt32 io_buffer_frame_size, void *io_main_buffer, void *io_secondary_buffer) {
     if (device_object_id != kDeviceObjectID || stream_object_id != kStreamObjectID) {
+        os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: DoIOOperation rejected device=%u stream=%u op=%u frames=%u", device_object_id, stream_object_id, operation_id, io_buffer_frame_size);
         return kAudioHardwareBadObjectError;
     }
+    os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: DoIOOperation device=%u stream=%u op=%u frames=%u", device_object_id, stream_object_id, operation_id, io_buffer_frame_size);
     if (operation_id != kAudioServerPlugInIOOperationReadInput) {
         return kAudioHardwareNoError;
     }
@@ -775,7 +809,28 @@ OSStatus TranslatorVirtualMicDriver::do_io_operation(AudioObjectID device_object
     }
 
     const TranslatorVirtualMicRenderResult result = render_source_.render(buffer, io_buffer_frame_size);
-    sample_time_.store(sample_time_.load() + static_cast<Float64>(result.frames_produced));
+    const UInt32 render_state = !result.source_available
+        ? kRenderStateUnavailable
+        : (!result.format_matches ? kRenderStateFormatMismatch : (result.frames_produced == 0 ? kRenderStateSilence : kRenderStateFlowing));
+    const UInt32 previous_state = last_render_state_.exchange(render_state);
+    if (render_state != previous_state) {
+        switch (render_state) {
+            case kRenderStateUnavailable:
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer unavailable at %{public}s", render_source_.reader().file_path().c_str());
+                break;
+            case kRenderStateFormatMismatch:
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer format mismatch at %{public}s", render_source_.reader().file_path().c_str());
+                break;
+            case kRenderStateSilence:
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer readable but empty, zero-filling %u frames", io_buffer_frame_size);
+                break;
+            case kRenderStateFlowing:
+                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer flowing, produced %zu frames at timestamp %llu", result.frames_produced, static_cast<unsigned long long>(result.timestamp_ns));
+                break;
+        }
+    }
+
+    sample_time_.store(sample_time_.load() + static_cast<Float64>(io_buffer_frame_size));
     zero_timestamp_seed_.store(result.timestamp_ns == 0 ? zero_timestamp_seed_.load() : result.timestamp_ns);
     return kAudioHardwareNoError;
 }

@@ -7,18 +7,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Run from repo root.
 
 ### Rust workspace
-- `cargo check` — primary workspace validation (also used by `scripts/build-dev.sh`)
-- `cargo build --release` — release build (`scripts/build-release.sh`)
-- `cargo test` — workspace tests (`scripts/run-integration-tests.sh`)
+- `cargo check` — primary workspace validation
+- `cargo test` — workspace tests
+- `cargo build --release` — release build
 - `cargo test -p output-bridge` — run a single crate’s tests
 - `cargo test -p output-bridge writes_and_reads_interleaved_pcm` — run a single test
 - `cargo run -p demo-cli` — run engine/session demo
 - `cargo run -p demo-cli --bin emit_shared_output` — write sample PCM into shared output file for native plug-in tests
 
+### Repo helper scripts
+- `./scripts/build-dev.sh` — currently runs `cargo test`
+- `./scripts/build-release.sh` — currently runs `cargo check`
+- `./scripts/run-integration-tests.sh` — currently runs `cargo build --release`
+
 ### Swift host app
 - `cd apps/macos-host && swift build`
-- `cd apps/macos-host && swift run TranslatorVirtualMicHost`
-- Host FFI runtime expects `TRANSLATOR_ENGINE_DYLIB`, defaulting to `../../../target/debug/libengine_api.dylib` from `apps/macos-host`.
+- `cp apps/macos-host/.build/arm64-apple-macosx/debug/TranslatorVirtualMicHost apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/`
+- Run with: `TRANSLATOR_ENGINE_DYLIB=/Users/sternelee/www/github/translator-virtual-mic/target/debug/libengine_api.dylib /Users/sternelee/www/github/translator-virtual-mic/apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost`
 
 ### Native virtual-mic plug-in + verifier
 - `./native/macos/scripts/build-plugin-bundle.sh` — build + ad-hoc sign `.driver` bundle
@@ -36,6 +41,55 @@ Run from repo root.
 
 ### FFI header refresh
 - `./scripts/generate-ffi-header.sh` writes `native/macos/ffi-headers/engine_api.h`
+
+## Testing flow
+
+### Full integration test
+1. Build Swift host: `cd apps/macos-host && swift build && cp .build/arm64-apple-macosx/debug/TranslatorVirtualMicHost TranslatorVirtualMicHost.app/Contents/MacOS/`
+2. Run Swift host: `TRANSLATOR_ENGINE_DYLIB=/Users/sternelee/www/github/translator-virtual-mic/target/debug/libengine_api.dylib ./apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost`
+3. In the app window, click **Start** button (status should show “Listening”)
+4. Open **QuickTime Player** → File → New Audio Recording
+5. Click the dropdown next to record button, select **Translator Virtual Mic**
+6. Start recording, speak into physical microphone
+7. Stop and playback to verify audio
+
+### Verify shared buffer
+```bash
+python3 -c “
+import struct
+f = open(‘/tmp/translator_virtual_mic/shared_output.bin’, ‘rb’)
+h = f.read(48)
+wi = struct.unpack(‘<Q’, h[24:32])[0]
+ri = struct.unpack(‘<Q’, h[32:40])[0]
+s = struct.unpack(‘<10f’, f.read(40))
+print(f’write={wi} read={ri} samples={[round(x,4) for x in s]}’)
+“
+```
+
+## Current status (2026-04-06)
+
+### Working
+- ✅ Physical microphone capture (Swift/AVFoundation)
+- ✅ PCM data flowing to Rust engine via FFI
+- ✅ Shared buffer write (Rust output-bridge)
+- ✅ HAL plugin installed and enumerated by CoreAudio
+- ✅ Virtual device appears in audio device list
+
+### Not working
+- ❌ QuickTime cannot record audio from Translator Virtual Mic
+- ❌ HAL plugin DoIOOperation not producing audio output
+
+### Data flow
+```
+Physical Mic → Swift Host → Rust Engine → Shared Buffer → HAL Plugin → Virtual Mic → QuickTime
+     ✅            ✅            ✅              ✅              ❌            ❌
+```
+
+### Next steps to debug
+1. Check HAL plugin `DoIOOperation` logs to see if it’s being called
+2. Verify `SharedBufferReader` is reading correct data
+3. Check if `read_index` is being updated by plugin (consumer)
+4. May need to add more logging to `translator_virtual_mic_driver.mm`
 
 ## Architecture overview
 
@@ -63,7 +117,7 @@ Main chain:
 - Rust/Swift boundary is C ABI, header at `native/macos/ffi-headers/engine_api.h`.
 - Shared output bridge is currently file-backed (not mmap/lock-free yet).
 - Virtual device target format is mono, 48 kHz, float32.
-- Current bottleneck is HAL acceptance/enumeration correctness of the plug-in, not bundle build/signing mechanics.
+- Current bottleneck is HAL plugin audio output - plugin is enumerated but not producing audio.
 
 ## Current state constraints to preserve
 - Keep audio-callback-path assumptions lightweight: no network-bound work in callback paths.

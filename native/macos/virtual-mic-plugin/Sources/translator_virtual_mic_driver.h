@@ -57,6 +57,7 @@ private:
     mutable std::atomic<UInt64> zero_timestamp_seed_;
     mutable std::atomic<Float64> sample_time_;
     std::atomic<UInt32> active_io_clients_;
+    std::atomic<UInt32> last_render_state_;
     TranslatorVirtualMicRenderSource render_source_;
 };
 

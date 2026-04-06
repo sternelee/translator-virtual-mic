@@ -38,6 +38,12 @@ float read_f32_le(const unsigned char *data) {
     std::memcpy(&value, &raw, sizeof(float));
     return value;
 }
+
+void write_u64_le(char *data, std::uint64_t value) {
+    for (std::size_t index = 0; index < 8; ++index) {
+        data[index] = static_cast<char>((value >> (index * 8U)) & 0xFFU);
+    }
+}
 } // namespace
 
 SharedBufferReader::SharedBufferReader(std::string file_path)
@@ -73,15 +79,60 @@ bool SharedBufferReader::read_header(TvmSharedBufferHeader &header) const {
     return header.magic == TVM_SHARED_BUFFER_MAGIC && header.version == TVM_SHARED_BUFFER_VERSION;
 }
 
-std::size_t SharedBufferReader::read_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const {
+std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const {
+    if (out_samples == nullptr) {
+        timestamp_ns = 0;
+        return 0;
+    }
+
+    std::fstream io(file_path_, std::ios::binary | std::ios::in | std::ios::out);
+    if (!io.is_open()) {
+        timestamp_ns = 0;
+        std::fill(out_samples, out_samples + max_frames, 0.0f);
+        return 0;
+    }
+
+    unsigned char header_bytes[header_size_bytes()] = {};
+    io.read(reinterpret_cast<char *>(header_bytes), static_cast<std::streamsize>(sizeof(header_bytes)));
+    if (io.gcount() != static_cast<std::streamsize>(sizeof(header_bytes))) {
+        timestamp_ns = 0;
+        std::fill(out_samples, out_samples + max_frames, 0.0f);
+        return 0;
+    }
+
     TvmSharedBufferHeader header {};
-    const std::vector<float> samples = read_all_samples(header);
-    if (samples.empty() || out_samples == nullptr) {
+    std::size_t cursor = 0;
+    header.magic = read_u32_le(header_bytes, cursor);
+    header.version = read_u32_le(header_bytes, cursor);
+    header.channel_count = read_u32_le(header_bytes, cursor);
+    header.sample_rate = read_u32_le(header_bytes, cursor);
+    header.capacity_frames = read_u32_le(header_bytes, cursor);
+    header.reserved = read_u32_le(header_bytes, cursor);
+    header.write_index_frames = read_u64_le(header_bytes, cursor);
+    header.read_index_frames = read_u64_le(header_bytes, cursor);
+    header.last_timestamp_ns = read_u64_le(header_bytes, cursor);
+
+    if (header.magic != TVM_SHARED_BUFFER_MAGIC || header.version != TVM_SHARED_BUFFER_VERSION) {
         timestamp_ns = header.last_timestamp_ns;
+        std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
 
     const std::size_t channels = std::max<std::size_t>(header.channel_count, 1);
+    const std::size_t sample_count = static_cast<std::size_t>(header.capacity_frames) * channels;
+    std::vector<unsigned char> bytes(sample_count * sizeof(float));
+    io.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (io.gcount() != static_cast<std::streamsize>(bytes.size())) {
+        timestamp_ns = header.last_timestamp_ns;
+        std::fill(out_samples, out_samples + max_frames, 0.0f);
+        return 0;
+    }
+
+    std::vector<float> samples(sample_count, 0.0f);
+    for (std::size_t index = 0; index < sample_count; ++index) {
+        samples[index] = read_f32_le(bytes.data() + (index * sizeof(float)));
+    }
+
     const std::size_t total_frames = samples.size() / channels;
     const std::size_t available_frames = std::min<std::size_t>(
         total_frames,
@@ -102,6 +153,14 @@ std::size_t SharedBufferReader::read_mono_frames(float *out_samples, std::size_t
     for (std::size_t frame = frames_to_copy; frame < max_frames; ++frame) {
         out_samples[frame] = 0.0f;
     }
+
+    header.read_index_frames += static_cast<std::uint64_t>(frames_to_copy);
+    char read_index_bytes[sizeof(std::uint64_t)] = {};
+    write_u64_le(read_index_bytes, header.read_index_frames);
+    io.clear();
+    io.seekp(static_cast<std::streamoff>((6 * sizeof(std::uint32_t)) + sizeof(std::uint64_t)), std::ios::beg);
+    io.write(read_index_bytes, static_cast<std::streamsize>(sizeof(read_index_bytes)));
+    io.flush();
 
     timestamp_ns = header.last_timestamp_ns;
     return frames_to_copy;

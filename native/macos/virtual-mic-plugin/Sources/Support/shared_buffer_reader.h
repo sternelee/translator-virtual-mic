@@ -14,7 +14,7 @@ public:
 
     const std::string &file_path() const;
     bool read_header(TvmSharedBufferHeader &header) const;
-    std::size_t read_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const;
+    std::size_t consume_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const;
     std::vector<float> read_all_samples(TvmSharedBufferHeader &header) const;
 
 private:
