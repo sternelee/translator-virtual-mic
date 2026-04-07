@@ -66,18 +66,18 @@ print(f’write={wi} read={ri} samples={[round(x,4) for x in s]}’)
 “
 ```
 
-## Current status (2026-04-06)
+## Current status (2026-04-07)
 
 ### Working
 - ✅ Physical microphone capture (Swift/AVFoundation)
 - ✅ PCM data flowing to Rust engine via FFI
 - ✅ Shared buffer write (Rust output-bridge)
-- ✅ HAL plugin installed and enumerated by CoreAudio
-- ✅ Virtual device appears in audio device list
+- ✅ HAL plugin successfully enumerated by CoreAudio
+- ✅ Virtual device appears in audio device list (see [docs/troubleshooting.md](docs/troubleshooting.md) for enumeration fixes)
 
 ### Not working
 - ❌ QuickTime cannot record audio from Translator Virtual Mic
-- ❌ HAL plugin DoIOOperation not producing audio output
+- ❌ HAL plugin DoIOOperation not producing audio output (SharedBufferReader reading but not yet flowing)
 
 ### Data flow
 ```

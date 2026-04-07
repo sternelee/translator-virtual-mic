@@ -196,10 +196,9 @@ Missing:
 
 #### Virtual microphone scaffold
 
-Status: partial but meaningful.
+Status: **Enumeration Successful**.
 
 Delivered:
-
 - shared output bridge
 - render-source consumption
 - driver property skeleton
@@ -207,18 +206,20 @@ Delivered:
 - bundle signing validation
 - COM-layout-correct driver factory path
 - host-side HAL verifier
+- **Successful system enumeration** (resolved by fixing `Info.plist` loading conditions and mandatory property handlers)
 
 Missing:
-
-- successful system enumeration of the installed virtual device
-- real HAL acceptance by macOS
+- real translated audio path into the virtual microphone
+- production-safe lock-free realtime buffers
+- production-quality Audio Server Plug-in object model
+- signing/distribution-grade install path
+- conferencing app compatibility validation
 
 ## Validation History
 
 ### Local validation that passes
 
 The following are currently passing:
-
 - `cargo check`
 - Rust demo CLI
 - native plug-in scaffold build
@@ -228,48 +229,21 @@ The following are currently passing:
 - HAL smoke verifier build
 - strict bundle signature verification with `codesign --verify --deep --strict`
 - native factory/reference validation with `factory_driver_ref_ok=1`
+- **System-wide device enumeration** (verified with `run-hal-smoke-verifier.sh --list`)
 
 ### Real system installation attempt
 
-Real install attempts were performed multiple times:
+Real install attempts were performed multiple times. As of 2026-04-07, the installation is fully functional:
+- The bundle is installed to `/Library/Audio/Plug-Ins/HAL/TranslatorVirtualMic.driver`.
+- `coreaudiod` successfully loads the driver (often in an isolated process).
+- The device `translator.virtual.mic.device` appears in the system audio list.
 
-- the bundle was copied into `/Library/Audio/Plug-Ins/HAL/TranslatorVirtualMic.driver`
-- the installed files were verified on disk
-- the installed bundle signature was verified on disk
-- the installed bundle metadata was updated and reinstalled
-- the installed factory export was updated and reinstalled
-- the installed COM-style driver-ref layout fix was updated and reinstalled
-
-However, the virtual device was not enumerated afterward.
-
-Observed results:
-
-- strict verifier: device not found for `translator.virtual.mic.device`
-- allow-missing verifier: returned `status=missing`
-- after the latest reboot check on 2026-04-03, device listing still showed only:
-  - `Redmi 27 NU`
-  - `MacBook Pro Microphone`
-  - `MacBook Pro Speakers`
-
-### Why the system validation is still blocked
-
-The earlier operational blocker during installation validation was:
-
-- `sudo launchctl kickstart -k system/com.apple.audio.coreaudiod` failed with:
-  - `150: Operation not permitted while System Integrity Protection is engaged`
-
-That was later worked around by using reboot-based validation instead of relying on daemon reload.
-
-So the current state is:
-
-- the HAL bundle can be built
-- the HAL bundle can be installed on disk
-- the installed bundle can now be strictly code-sign verified
-- the installed bundle now exports `AudioServerPlugIn_Create`
-- the factory now returns a COM-style driver ref layout validated locally
-- but the device is still not currently enumerated by CoreAudio after reboot
-
-That means the remaining blocker is no longer basic install/signing mechanics. The remaining blocker is that the current Audio Server Plug-in implementation is still not being accepted by HAL as an enumerable device.
+### Troubleshooting and Fixes
+For details on resolved enumeration issues, see [docs/troubleshooting.md](troubleshooting.md).
+Key fixes included:
+- Removing `AudioServerPlugIn_LoadingConditions` from `Info.plist`.
+- Implementing mandatory property handlers for `'rsrc'`, `'taps'`, and `'ctrl'`.
+- Handling permission issues during the rebuild/deploy cycle.
 
 ## Installation and Usage
 

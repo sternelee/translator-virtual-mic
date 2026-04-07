@@ -539,6 +539,8 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<AudioObjectID *>(out_data) = kDeviceObjectID;
             break;
         }
+        case kAudioObjectPropertyControlList:
+        case kPropertyTapList:
         case kAudioObjectPropertyCustomPropertyInfoList: {
             break;
         }
@@ -556,9 +558,6 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             if (required_size > 0) {
                 *reinterpret_cast<AudioObjectID *>(out_data) = kStreamObjectID;
             }
-            break;
-        }
-        case kAudioObjectPropertyControlList: {
             break;
         }
         case kAudioDevicePropertyNominalSampleRate: {
@@ -817,22 +816,20 @@ OSStatus TranslatorVirtualMicDriver::do_io_operation(AudioObjectID device_object
     const UInt32 render_state = !result.source_available
         ? kRenderStateUnavailable
         : (!result.format_matches ? kRenderStateFormatMismatch : (result.frames_produced == 0 ? kRenderStateSilence : kRenderStateFlowing));
-    const UInt32 previous_state = last_render_state_.exchange(render_state);
-    if (render_state != previous_state) {
-        switch (render_state) {
-            case kRenderStateUnavailable:
-                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer unavailable at %{public}s", render_source_.reader().file_path().c_str());
-                break;
-            case kRenderStateFormatMismatch:
-                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer format mismatch at %{public}s", render_source_.reader().file_path().c_str());
-                break;
-            case kRenderStateSilence:
-                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer readable but empty, zero-filling %u frames", io_buffer_frame_size);
-                break;
-            case kRenderStateFlowing:
-                os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer flowing, produced %zu frames at timestamp %llu", result.frames_produced, static_cast<unsigned long long>(result.timestamp_ns));
-                break;
-        }
+    
+    switch (render_state) {
+        case kRenderStateUnavailable:
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer unavailable at %{public}s", render_source_.reader().file_path().c_str());
+            break;
+        case kRenderStateFormatMismatch:
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer format mismatch at %{public}s", render_source_.reader().file_path().c_str());
+            break;
+        case kRenderStateSilence:
+            // os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer readable but empty, zero-filling %u frames", io_buffer_frame_size);
+            break;
+        case kRenderStateFlowing:
+            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer flowing, produced %zu frames at timestamp %llu", result.frames_produced, static_cast<unsigned long long>(result.timestamp_ns));
+            break;
     }
 
     sample_time_.store(sample_time_.load() + static_cast<Float64>(io_buffer_frame_size));
