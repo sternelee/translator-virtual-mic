@@ -32,6 +32,8 @@ final class MicrophoneCaptureService: NSObject, AVCaptureAudioDataOutputSampleBu
         let output = AVCaptureAudioDataOutput()
         output.audioSettings = [
             AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
             AVLinearPCMIsFloatKey: true,
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsNonInterleaved: false,
