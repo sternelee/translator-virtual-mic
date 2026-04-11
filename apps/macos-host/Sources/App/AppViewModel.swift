@@ -29,6 +29,7 @@ final class AppViewModel: ObservableObject {
     @Published var selectedDeviceUID: String?
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
+    @Published var useAzureLiveTranslation: Bool = false
     @Published var targetLanguage: String = "en"
     @Published var inputGainDB: Double = 6.0
     @Published var limiterThresholdDB: Double = -6.0
@@ -37,8 +38,10 @@ final class AppViewModel: ObservableObject {
     @Published var metricsJSON: String = "{}"
     @Published var sharedOutputPath: String = ""
     @Published var sharedBufferStatusText: String = "Shared buffer idle"
+    @Published var translationStateJSON: String = "{}"
 
     private let captureService = MicrophoneCaptureService()
+    private let azureVoiceLiveService = AzureVoiceLiveService()
     private var engine: EngineBox?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
@@ -93,12 +96,7 @@ final class AppViewModel: ObservableObject {
     func startEngine() {
         stopEngine()
         appendLog("Starting engine with device UID: \(selectedDeviceUID ?? "nil")")
-        let configJSON = String(
-            format: #"{"target":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
-            targetLanguage,
-            inputGainDB,
-            limiterThresholdDB
-        )
+        let configJSON = buildEngineConfigJSON()
         appendLog("Engine config: \(configJSON)")
         let engine = EngineBox(configJSON: configJSON)
         guard engine.start() == 0 else {
@@ -108,6 +106,7 @@ final class AppViewModel: ObservableObject {
         }
 
         _ = engine.setTargetLanguage(targetLanguage)
+        _ = engine.setMode(useAzureLiveTranslation ? .translate : .bypass)
         let sharedResult = engine.enableSharedOutput(capacityFrames: 14_400, channels: 1, sampleRate: 48_000)
         appendLog("enableSharedOutput result: \(sharedResult)")
         if sharedResult != 0 {
@@ -162,15 +161,20 @@ final class AppViewModel: ObservableObject {
         self.engine = engine
         statusText = "Listening"
         metricsJSON = engine.metricsJSON()
+        translationStateJSON = engine.translationStateJSON()
         appendLog("Engine started")
         if !sharedOutputPath.isEmpty {
             appendLog("Shared output file: \(sharedOutputPath)")
+        }
+        if useAzureLiveTranslation {
+            startAzureVoiceLive(using: engine)
         }
         startSharedBufferMonitor()
     }
 
     func stopEngine() {
         captureService.stop()
+        azureVoiceLiveService.stop()
         stopSharedBufferMonitor()
         guard let engine else { return }
         _ = engine.stop()
@@ -179,8 +183,63 @@ final class AppViewModel: ObservableObject {
         inputLevel = 0
         sharedOutputPath = ""
         sharedBufferStatusText = "Shared buffer idle"
+        translationStateJSON = "{}"
         lastSharedBufferSnapshot = .missing
         appendLog("Engine stopped")
+    }
+
+    private func buildEngineConfigJSON() -> String {
+        let sourceLocale = "auto"
+        let targetLocale: String = switch targetLanguage {
+        case "zh":
+            "zh-CN"
+        case "ja":
+            "ja-JP"
+        default:
+            "en-US"
+        }
+
+        let endpoint = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_ENDPOINT"] ?? ""
+        let model = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_MODEL"] ?? "gpt-realtime"
+        let voiceName = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_VOICE_NAME"]
+            ?? (targetLanguage == "zh" ? "zh-CN-XiaoxiaoNeural" : targetLanguage == "ja" ? "ja-JP-NanamiNeural" : "en-US-Ava:DragonHDLatestNeural")
+        let mode = useAzureLiveTranslation ? "translate" : "bypass"
+        let provider = useAzureLiveTranslation ? "azure_voice_live" : "none"
+
+        return String(
+            format: #"{"target":"%@","mode":"%@","translation_provider":"%@","azure_voice_live_endpoint":"%@","azure_voice_live_model":"%@","azure_voice_live_api_key_env":"AZURE_VOICELIVE_API_KEY","azure_voice_live_voice_name":"%@","azure_voice_live_source_locale":"%@","azure_voice_live_target_locale":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
+            targetLanguage,
+            mode,
+            provider,
+            endpoint,
+            model,
+            voiceName,
+            sourceLocale,
+            targetLocale,
+            inputGainDB,
+            limiterThresholdDB
+        )
+    }
+
+    private func startAzureVoiceLive(using engine: EngineBox) {
+        let endpoint = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_ENDPOINT"] ?? ""
+        let apiKey = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_API_KEY"] ?? ""
+        guard !endpoint.isEmpty else {
+            appendLog("Azure Voice Live disabled: AZURE_VOICELIVE_ENDPOINT is missing")
+            return
+        }
+        guard !apiKey.isEmpty else {
+            appendLog("Azure Voice Live disabled: AZURE_VOICELIVE_API_KEY is missing")
+            return
+        }
+
+        azureVoiceLiveService.start(engine: engine, endpoint: endpoint, apiKey: apiKey) { [weak self] message in
+            Task { @MainActor in
+                self?.appendLog(message)
+                self?.translationStateJSON = engine.translationStateJSON()
+            }
+        }
+        appendLog("Azure Voice Live started")
     }
 
     private func startSharedBufferMonitor() {

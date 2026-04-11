@@ -12,6 +12,7 @@ struct ContentView: View {
                         Text("Input Level")
                         ProgressView(value: Double(viewModel.inputLevel), total: 1.0)
                     }
+                    Toggle("Azure Live Translation", isOn: $viewModel.useAzureLiveTranslation)
                     Picker("Target Language", selection: $viewModel.targetLanguage) {
                         Text("English").tag("en")
                         Text("Chinese").tag("zh")
@@ -74,6 +75,9 @@ struct ContentView: View {
                         .textSelection(.enabled)
                 }
                 Text(viewModel.sharedBufferStatusText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                Text(viewModel.translationStateJSON)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
                 Text(viewModel.metricsJSON)

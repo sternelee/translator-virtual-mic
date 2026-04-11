@@ -9,7 +9,7 @@ fn main() {
     session
         .enable_shared_output(960, 1, 48_000)
         .expect("enable shared output");
-    session.start();
+    session.start().expect("start");
 
     let frames = 480usize;
     let samples: Vec<f32> = (0..frames)

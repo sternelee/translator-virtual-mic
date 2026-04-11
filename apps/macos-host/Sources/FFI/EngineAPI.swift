@@ -22,22 +22,30 @@ final class EngineRuntime {
     typealias StartFn = @convention(c) (EngineHandleRef?) -> Int32
     typealias StopFn = @convention(c) (EngineHandleRef?) -> Int32
     typealias SetTargetLanguageFn = @convention(c) (EngineHandleRef?, UnsafePointer<CChar>?) -> Int32
+    typealias SetModeFn = @convention(c) (EngineHandleRef?, Int32) -> Int32
     typealias EnableSharedOutputFn = @convention(c) (EngineHandleRef?, Int32, Int32, Int32) -> Int32
     typealias PushInputPcmFn = @convention(c) (EngineHandleRef?, UnsafePointer<Float>?, Int32, Int32, Int32, UInt64) -> Int32
+    typealias TakeNextTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
+    typealias IngestTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafePointer<CChar>?) -> Int32
     typealias LastErrorFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias MetricsJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias SharedOutputPathFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
+    typealias TranslationStateJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
 
     let create: CreateFn
     let destroy: DestroyFn
     let start: StartFn
     let stop: StopFn
     let setTargetLanguage: SetTargetLanguageFn
+    let setMode: SetModeFn
     let enableSharedOutput: EnableSharedOutputFn
     let pushInputPcm: PushInputPcmFn
+    let takeNextTranslationEvent: TakeNextTranslationEventFn
+    let ingestTranslationEvent: IngestTranslationEventFn
     let lastError: LastErrorFn
     let metricsJson: MetricsJsonFn
     let sharedOutputPath: SharedOutputPathFn
+    let translationStateJson: TranslationStateJsonFn
 
     private let dylibHandle: UnsafeMutableRawPointer
 
@@ -77,11 +85,15 @@ final class EngineRuntime {
             start: loadSymbol("engine_start", as: StartFn.self),
             stop: loadSymbol("engine_stop", as: StopFn.self),
             setTargetLanguage: loadSymbol("engine_set_target_language", as: SetTargetLanguageFn.self),
+            setMode: loadSymbol("engine_set_mode", as: SetModeFn.self),
             enableSharedOutput: loadSymbol("engine_enable_shared_output", as: EnableSharedOutputFn.self),
             pushInputPcm: loadSymbol("engine_push_input_pcm", as: PushInputPcmFn.self),
+            takeNextTranslationEvent: loadSymbol("engine_take_next_translation_event", as: TakeNextTranslationEventFn.self),
+            ingestTranslationEvent: loadSymbol("engine_ingest_translation_event", as: IngestTranslationEventFn.self),
             lastError: loadSymbol("engine_get_last_error", as: LastErrorFn.self),
             metricsJson: loadSymbol("engine_get_metrics_json", as: MetricsJsonFn.self),
-            sharedOutputPath: loadSymbol("engine_get_shared_output_path", as: SharedOutputPathFn.self)
+            sharedOutputPath: loadSymbol("engine_get_shared_output_path", as: SharedOutputPathFn.self),
+            translationStateJson: loadSymbol("engine_get_translation_state_json", as: TranslationStateJsonFn.self)
         )
     }
 
@@ -124,11 +136,15 @@ final class EngineRuntime {
         start: StartFn,
         stop: StopFn,
         setTargetLanguage: SetTargetLanguageFn,
+        setMode: SetModeFn,
         enableSharedOutput: EnableSharedOutputFn,
         pushInputPcm: PushInputPcmFn,
+        takeNextTranslationEvent: TakeNextTranslationEventFn,
+        ingestTranslationEvent: IngestTranslationEventFn,
         lastError: LastErrorFn,
         metricsJson: MetricsJsonFn,
-        sharedOutputPath: SharedOutputPathFn
+        sharedOutputPath: SharedOutputPathFn,
+        translationStateJson: TranslationStateJsonFn
     ) {
         self.dylibHandle = dylibHandle
         self.create = create
@@ -136,11 +152,15 @@ final class EngineRuntime {
         self.start = start
         self.stop = stop
         self.setTargetLanguage = setTargetLanguage
+        self.setMode = setMode
         self.enableSharedOutput = enableSharedOutput
         self.pushInputPcm = pushInputPcm
+        self.takeNextTranslationEvent = takeNextTranslationEvent
+        self.ingestTranslationEvent = ingestTranslationEvent
         self.lastError = lastError
         self.metricsJson = metricsJson
         self.sharedOutputPath = sharedOutputPath
+        self.translationStateJson = translationStateJson
     }
 
     deinit {

@@ -4,7 +4,7 @@
 
 This document records the current technical plan, implementation status, installation flow, usage steps, and known limitations for the macOS-first Translator Virtual Mic prototype.
 
-Current date baseline for this document: 2026-04-03.
+Current date baseline for this document: 2026-04-12.
 
 ## Technical Plan
 
@@ -46,6 +46,12 @@ Current narrow-path assumptions:
 - shared output path: `/tmp/translator_virtual_mic/shared_output.bin`
 - current engine mode focus: silence or passthrough-like validation mode
 
+Current translation integration direction:
+
+- preferred cloud translation path: Azure Voice Live / Live Interpreter style speech-to-speech integration
+- local fallback path: bypass
+- translated return path target: mono, 48 kHz, float32 into shared output
+
 ## Repository Status
 
 ### Implemented now
@@ -72,6 +78,12 @@ Implemented and validated:
 - diagnostics:
   - `engine_get_last_error`
   - `engine_get_metrics_json`
+- Azure Voice Live integration skeleton:
+  - config parsing for provider selection
+  - websocket URL and auth-header planning
+  - outbound event generation for `session.update`, `response.create`, and `input_audio_buffer.append`
+  - inbound event parsing for translated audio deltas
+  - FFI surfaces for translation event dequeue / ingest / state JSON
 
 The checked-in C header is:
 
@@ -87,6 +99,8 @@ Implemented as scaffold:
 - runtime Rust dylib loading and C ABI binding
 - microphone capture scaffold pushing PCM into Rust
 - engine state/metrics/shared-output path display
+- Azure Live translation toggle scaffold in the host app
+- URLSessionWebSocket-based Azure Voice Live transport worker scaffold
 
 #### Virtual mic plug-in side
 
@@ -196,7 +210,7 @@ Missing:
 
 #### Virtual microphone scaffold
 
-Status: **Enumeration Successful**.
+Status: **Working Audio Path**.
 
 Delivered:
 - shared output bridge
@@ -207,27 +221,28 @@ Delivered:
 - COM-layout-correct driver factory path
 - host-side HAL verifier
 - **Successful system enumeration** (resolved by fixing `Info.plist` loading conditions and mandatory property handlers)
+- **QuickTime recording path working through `Translator Virtual Mic`**
+- shared-buffer magic alignment fix
+- continuous local read-head playback strategy in the plug-in reader
+- stable shared-buffer-driven `DoIOOperation` flow during live capture
+- quality improvements:
+  - host-side gain control
+  - soft limiter
+  - Bluetooth-input sample-rate compatibility path
 
 Missing:
-- real translated audio path into the virtual microphone
+- real Azure-translated audio path into the virtual microphone from a live cloud session
 - production-safe lock-free realtime buffers
 - production-quality Audio Server Plug-in object model
 - signing/distribution-grade install path
 - conferencing app compatibility validation
 
-Current runtime blocker on 2026-04-11:
+Current runtime state on 2026-04-12:
 
-- QuickTime now reaches HAL input-read callbacks:
-  - `BeginIOOperation`
-  - `DoIOOperation`
-- the installed plug-in repeatedly reports:
-  - `shared buffer unavailable at /tmp/translator_virtual_mic/shared_output.bin`
-- verifier output during active capture can show:
-  - `is_running=false`
-  - `is_running_somewhere=true`
-
-That means the active blocker is no longer enumeration or HAL callback wiring.
-The active blocker is that the host side is not producing a shared output file that the isolated driver helper can open at `/tmp/translator_virtual_mic/shared_output.bin`.
+- QuickTime recording now successfully receives audio from `Translator Virtual Mic`
+- host-side physical microphone input is routed into the virtual mic
+- Bluetooth headset input also works after adding sample-rate adaptation
+- remaining cloud-translation work is now focused on Azure Voice Live transport completion and end-to-end live session validation
 
 ## Validation History
 
@@ -235,6 +250,7 @@ The active blocker is that the host side is not producing a shared output file t
 
 The following are currently passing:
 - `cargo check`
+- `cargo test -p common -p session-core -p engine-api`
 - Rust demo CLI
 - native plug-in scaffold build
 - native render-source test
@@ -252,6 +268,14 @@ Real install attempts were performed multiple times. As of 2026-04-07, the insta
 - `coreaudiod` successfully loads the driver (often in an isolated process).
 - The device `translator.virtual.mic.device` appears in the system audio list.
 
+As of 2026-04-11 and 2026-04-12:
+
+- the system driver can be rebuilt and redeployed successfully
+- QuickTime reaches `StartIO`, `WillDoIOOperation`, `BeginIOOperation`, and `DoIOOperation`
+- shared buffer playback is confirmed live via:
+  - `shared buffer flowing, produced ...`
+- QuickTime can record audible output from the virtual microphone device
+
 ### Troubleshooting and Fixes
 For details on resolved enumeration issues, see [docs/troubleshooting.md](troubleshooting.md).
 Key fixes included:
@@ -260,9 +284,9 @@ Key fixes included:
 - Handling permission issues during the rebuild/deploy cycle.
 
 Current debugging focus:
-- make host-side shared output creation failure explicit in the UI/logs
-- make Rust dylib loading robust when the macOS host app is launched outside the repo working directory
-- verify whether the host app is failing to load `libengine_api.dylib` or failing to create the shared buffer file after load
+- finish Azure Voice Live network transport validation against a real Azure resource
+- connect translated cloud audio back into the virtual microphone output path in `Translate` mode
+- reduce debug-log noise and evolve the current scaffolds into production-safe streaming code
 
 ## Installation and Usage
 

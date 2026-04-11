@@ -15,6 +15,20 @@ fallback_mode = "bypass"
 source = "auto"
 target = "en"
 
+[translation]
+provider = "azure_voice_live"
+
+[azure_voice_live]
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+api_version = "2025-10-01"
+model = "gpt-realtime"
+api_key_env = "AZURE_VOICELIVE_API_KEY"
+voice_name = "en-US-Ava:DragonHDLatestNeural"
+voice_type = "azure-standard"
+source_locale = "auto"
+target_locale = "en-US"
+enable_server_vad = true
+
 [virtual_device]
 name = "Translator Virtual Mic"
 preferred_sample_rate = 48000

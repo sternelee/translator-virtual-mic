@@ -1,9 +1,13 @@
+pub mod azure_voice_live;
+
 use std::sync::Arc;
 
 use audio_core::{build_frame, SampleRingBuffer};
-use common::{AudioFrame, EngineConfig, EngineError, EngineMode, Result};
+use common::{AudioFrame, EngineConfig, EngineError, EngineMode, Result, TranslationProvider};
 use metrics::EngineMetrics;
 use output_bridge::{SharedBufferSnapshot, SharedOutputBuffer};
+
+pub use azure_voice_live::{AzureVoiceLiveBridge, AzureVoiceLivePlan, AzureVoiceLiveRuntimeState};
 
 pub struct EngineSession {
     config: EngineConfig,
@@ -11,6 +15,7 @@ pub struct EngineSession {
     input_ring: Arc<SampleRingBuffer>,
     output_ring: Arc<SampleRingBuffer>,
     shared_output: Option<Arc<SharedOutputBuffer>>,
+    azure_voice_live: Option<AzureVoiceLiveBridge>,
     running: bool,
 }
 
@@ -25,16 +30,20 @@ impl EngineSession {
             input_ring,
             output_ring,
             shared_output: None,
+            azure_voice_live: None,
             running: false,
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> Result<()> {
+        self.sync_translation_bridge()?;
         self.running = true;
+        Ok(())
     }
 
     pub fn stop(&mut self) {
         self.running = false;
+        self.azure_voice_live = None;
     }
 
     pub fn set_target_language(&mut self, lang: &str) {
@@ -43,6 +52,9 @@ impl EngineSession {
 
     pub fn set_mode(&mut self, mode: EngineMode) {
         self.config.mode = mode;
+        if self.running {
+            let _ = self.sync_translation_bridge();
+        }
     }
 
     pub fn enable_shared_output(&mut self, capacity_frames: usize, channels: u16, sample_rate: u32) -> Result<()> {
@@ -98,7 +110,12 @@ impl EngineSession {
                     shared_output.write_frame(&output_frame)?;
                 }
             }
-            EngineMode::Translate | EngineMode::CaptionOnly | EngineMode::MuteOnFailure => {}
+            EngineMode::Translate => {
+                if let Some(bridge) = &mut self.azure_voice_live {
+                    bridge.queue_input_audio_f32(&frame.data, frame.sample_rate);
+                }
+            }
+            EngineMode::CaptionOnly | EngineMode::MuteOnFailure => {}
         }
 
         Ok(())
@@ -141,6 +158,68 @@ impl EngineSession {
 
     pub fn target_language(&self) -> &str {
         &self.config.target_language
+    }
+
+    pub fn azure_voice_live_plan(&self) -> Result<AzureVoiceLivePlan> {
+        azure_voice_live::AzureVoiceLivePlan::from_config(&self.config)
+    }
+
+    pub fn take_next_azure_voice_live_event(&mut self) -> Result<Option<String>> {
+        let bridge = self
+            .azure_voice_live
+            .as_mut()
+            .ok_or_else(|| EngineError::new("azure voice live bridge is not active"))?;
+        Ok(bridge.take_next_event())
+    }
+
+    pub fn ingest_azure_voice_live_server_event(&mut self, raw_event: &str) -> Result<usize> {
+        let bridge = self
+            .azure_voice_live
+            .as_mut()
+            .ok_or_else(|| EngineError::new("azure voice live bridge is not active"))?;
+        let Some(samples) = bridge.ingest_server_event(raw_event)? else {
+            return Ok(0);
+        };
+
+        let output_data = if self.config.output_sample_rate == 24_000 {
+            samples
+        } else {
+            resample_interleaved_linear(
+                &samples,
+                samples.len(),
+                1,
+                24_000,
+                self.config.output_sample_rate,
+            )
+        };
+        let output_frame = AudioFrame {
+            timestamp_ns: bridge.state().translated_audio_samples,
+            sample_rate: self.config.output_sample_rate,
+            channels: 1,
+            data: output_data,
+        };
+
+        let dropped = self.output_ring.push_frame(&output_frame)?;
+        if dropped > 0 {
+            self.metrics.record_overflow();
+        }
+        if let Some(shared_output) = &self.shared_output {
+            shared_output.write_frame(&output_frame)?;
+        }
+        Ok(output_frame.frames())
+    }
+
+    pub fn azure_voice_live_state(&self) -> Option<&AzureVoiceLiveRuntimeState> {
+        self.azure_voice_live.as_ref().map(AzureVoiceLiveBridge::state)
+    }
+
+    fn sync_translation_bridge(&mut self) -> Result<()> {
+        if self.config.mode == EngineMode::Translate && self.config.translation_provider == TranslationProvider::AzureVoiceLive {
+            self.azure_voice_live = Some(AzureVoiceLiveBridge::from_config(&self.config)?);
+        } else {
+            self.azure_voice_live = None;
+        }
+        Ok(())
     }
 
     fn output_frame_from_input(&self, frame: &AudioFrame) -> AudioFrame {
@@ -244,7 +323,7 @@ mod tests {
         session
             .enable_shared_output(960, 1, 48_000)
             .expect("enable shared output");
-        session.start();
+        session.start().expect("start");
 
         let input_samples: Vec<f32> = vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5];
         session
@@ -272,5 +351,59 @@ mod tests {
         assert!(frame.data[0] > 0.25);
         assert!(frame.data[3] < 1.0);
         assert!(frame.data.iter().all(|sample| sample.abs() <= 1.0));
+    }
+
+    #[test]
+    fn translate_mode_queues_and_ingests_azure_events() {
+        let mut session = EngineSession::new(EngineConfig::from_json_lossy(
+            r#"{
+                "translation_provider":"azure_voice_live",
+                "azure_voice_live_endpoint":"https://example-resource.cognitiveservices.azure.com",
+                "azure_voice_live_api_version":"2025-10-01",
+                "azure_voice_live_model":"gpt-realtime",
+                "azure_voice_live_api_key":"test-key",
+                "azure_voice_live_voice_name":"en-US-Ava:DragonHDLatestNeural",
+                "azure_voice_live_source_locale":"auto",
+                "azure_voice_live_target_locale":"en-US"
+            }"#,
+        ));
+        session.set_mode(EngineMode::Translate);
+        session
+            .enable_shared_output(960, 1, 48_000)
+            .expect("enable shared output");
+        session.start().expect("start");
+
+        let bootstrap = session
+            .take_next_azure_voice_live_event()
+            .expect("take event")
+            .expect("session update");
+        assert!(bootstrap.contains("\"type\":\"session.update\""));
+        let response_create = session
+            .take_next_azure_voice_live_event()
+            .expect("take event")
+            .expect("response create");
+        assert!(response_create.contains("\"type\":\"response.create\""));
+
+        session
+            .push_input_pcm(&[0.0, 0.25, -0.25, 0.5], 4, 1, 48_000, 1)
+            .expect("push input");
+        let append_event = session
+            .take_next_azure_voice_live_event()
+            .expect("take event")
+            .expect("audio append");
+        assert!(append_event.contains("\"type\":\"input_audio_buffer.append\""));
+
+        let event = r#"{
+            "type":"response.audio.delta",
+            "response_id":"resp_1",
+            "item_id":"item_1",
+            "delta":"AAABAA=="
+        }"#;
+        let frames = session
+            .ingest_azure_voice_live_server_event(event)
+            .expect("ingest event");
+        assert!(frames > 0);
+        let state = session.azure_voice_live_state().expect("state");
+        assert_eq!(state.audio_delta_count, 1);
     }
 }

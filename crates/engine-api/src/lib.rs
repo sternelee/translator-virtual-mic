@@ -12,6 +12,7 @@ pub struct EngineHandle {
     last_error: Mutex<CString>,
     metrics_json: Mutex<CString>,
     shared_output_path: Mutex<CString>,
+    translation_state_json: Mutex<CString>,
 }
 
 impl EngineHandle {
@@ -23,6 +24,7 @@ impl EngineHandle {
             last_error: Mutex::new(cstring_clean("")),
             metrics_json: Mutex::new(cstring_clean("{}")),
             shared_output_path: Mutex::new(cstring_clean("")),
+            translation_state_json: Mutex::new(cstring_clean("{}")),
         }
     }
 
@@ -46,6 +48,29 @@ impl EngineHandle {
             .shared_output_path
             .lock()
             .expect("shared_output_path poisoned") = cstring_clean(&path);
+    }
+
+    fn update_translation_state_cache(&self) {
+        let state_json = {
+            let session = self.session.lock().expect("session poisoned");
+            if let Some(state) = session.azure_voice_live_state() {
+                format!(
+                    "{{\"audio_delta_count\":{},\"audio_done_count\":{},\"transcript_delta_count\":{},\"translated_audio_samples\":{},\"last_response_id\":\"{}\",\"last_item_id\":\"{}\"}}",
+                    state.audio_delta_count,
+                    state.audio_done_count,
+                    state.transcript_delta_count,
+                    state.translated_audio_samples,
+                    state.last_response_id,
+                    state.last_item_id
+                )
+            } else {
+                "{}".to_string()
+            }
+        };
+        *self
+            .translation_state_json
+            .lock()
+            .expect("translation_state_json poisoned") = cstring_clean(&state_json);
     }
 }
 
@@ -94,7 +119,12 @@ pub extern "C" fn engine_destroy(handle: *mut EngineHandle) {
 #[no_mangle]
 pub extern "C" fn engine_start(handle: *mut EngineHandle) -> i32 {
     with_handle(handle, |handle| {
-        handle.session.lock().expect("session poisoned").start();
+        handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .start()
+            .map_err(|err| err.to_string())?;
         handle.update_metrics_cache();
         Ok(())
     })
@@ -298,5 +328,76 @@ pub extern "C" fn engine_get_shared_output_path(handle: *mut EngineHandle) -> *c
         .shared_output_path
         .lock()
         .expect("shared_output_path poisoned")
+        .as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn engine_take_next_translation_event(
+    handle: *mut EngineHandle,
+    out_json: *mut c_char,
+    max_len: i32,
+) -> i32 {
+    with_handle(handle, |handle| {
+        if out_json.is_null() {
+            return Err("out_json pointer is null".to_string());
+        }
+        if max_len <= 0 {
+            return Err("max_len must be positive".to_string());
+        }
+
+        let maybe_event = handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .take_next_azure_voice_live_event()
+            .map_err(|err| err.to_string())?;
+        let Some(event) = maybe_event else {
+            unsafe { ptr::write(out_json, 0) };
+            return Ok(0);
+        };
+
+        let bytes = event.as_bytes();
+        let writable = (max_len as usize).saturating_sub(1);
+        let copy_len = writable.min(bytes.len());
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out_json, copy_len);
+            ptr::write(out_json.add(copy_len), 0);
+        }
+        Ok(copy_len as i32)
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn engine_ingest_translation_event(handle: *mut EngineHandle, event_json: *const c_char) -> i32 {
+    with_handle(handle, |handle| {
+        let event_json = read_optional_cstr(event_json);
+        if event_json.is_empty() {
+            return Err("event_json is empty".to_string());
+        }
+        let frames = handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .ingest_azure_voice_live_server_event(&event_json)
+            .map_err(|err| err.to_string())?;
+        handle.update_translation_state_cache();
+        handle.update_metrics_cache();
+        Ok(frames as i32)
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn engine_get_translation_state_json(handle: *mut EngineHandle) -> *const c_char {
+    if handle.is_null() {
+        return ptr::null();
+    }
+    let handle = unsafe { &*handle };
+    handle.update_translation_state_cache();
+    handle
+        .translation_state_json
+        .lock()
+        .expect("translation_state_json poisoned")
         .as_ptr()
 }

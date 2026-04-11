@@ -38,6 +38,11 @@ final class EngineBox {
         return language.withCString { runtime.setTargetLanguage(handle, $0) }
     }
 
+    func setMode(_ mode: EngineMode) -> Int32 {
+        guard let runtime, let handle else { return -1 }
+        return runtime.setMode(handle, mode.rawValue)
+    }
+
     func enableSharedOutput(capacityFrames: Int32, channels: Int32, sampleRate: Int32) -> Int32 {
         guard let runtime, let handle else { return -1 }
         return runtime.enableSharedOutput(handle, capacityFrames, channels, sampleRate)
@@ -60,6 +65,31 @@ final class EngineBox {
     func sharedOutputPath() -> String {
         guard let runtime, let handle, let raw = runtime.sharedOutputPath(handle) else {
             return ""
+        }
+        return String(cString: raw)
+    }
+
+    func takeNextTranslationEvent() -> String? {
+        guard let runtime, let handle else { return nil }
+        let bufferSize = 64 * 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        buffer.initialize(repeating: 0, count: bufferSize)
+        let written = runtime.takeNextTranslationEvent(handle, buffer, Int32(bufferSize))
+        guard written > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    func ingestTranslationEvent(_ json: String) -> Int32 {
+        guard let runtime, let handle else { return -1 }
+        return json.withCString { runtime.ingestTranslationEvent(handle, $0) }
+    }
+
+    func translationStateJSON() -> String {
+        guard let runtime, let handle, let raw = runtime.translationStateJson(handle) else {
+            return "{}"
         }
         return String(cString: raw)
     }
