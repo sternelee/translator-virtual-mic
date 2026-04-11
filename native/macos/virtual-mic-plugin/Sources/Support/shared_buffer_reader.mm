@@ -74,15 +74,24 @@ bool SharedBufferReader::read_header(TvmSharedBufferHeader &header) const {
     return header.magic == TVM_SHARED_BUFFER_MAGIC && header.version == TVM_SHARED_BUFFER_VERSION;
 }
 
-std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::size_t max_frames, std::uint64_t &timestamp_ns) const {
+std::size_t SharedBufferReader::consume_mono_frames(
+    float *out_samples,
+    std::size_t max_frames,
+    std::uint64_t &timestamp_ns,
+    std::uint64_t &write_index_frames,
+    std::uint64_t &read_index_frames) const {
     if (out_samples == nullptr) {
         timestamp_ns = 0;
+        write_index_frames = 0;
+        read_index_frames = 0;
         return 0;
     }
 
     std::ifstream input(file_path_, std::ios::binary);
     if (!input.is_open()) {
         timestamp_ns = 0;
+        write_index_frames = 0;
+        read_index_frames = 0;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
@@ -91,6 +100,8 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
     input.read(reinterpret_cast<char *>(header_bytes), static_cast<std::streamsize>(sizeof(header_bytes)));
     if (input.gcount() != static_cast<std::streamsize>(sizeof(header_bytes))) {
         timestamp_ns = 0;
+        write_index_frames = 0;
+        read_index_frames = 0;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
@@ -106,9 +117,11 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
     header.write_index_frames = read_u64_le(header_bytes, cursor);
     header.read_index_frames = read_u64_le(header_bytes, cursor);
     header.last_timestamp_ns = read_u64_le(header_bytes, cursor);
+    write_index_frames = header.write_index_frames;
 
     if (header.magic != TVM_SHARED_BUFFER_MAGIC || header.version != TVM_SHARED_BUFFER_VERSION) {
         timestamp_ns = header.last_timestamp_ns;
+        read_index_frames = header.read_index_frames;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
@@ -119,6 +132,7 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
     input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
         timestamp_ns = header.last_timestamp_ns;
+        read_index_frames = header.read_index_frames;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
@@ -129,16 +143,38 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
     }
 
     const std::size_t total_frames = samples.size() / channels;
-    const std::size_t available_frames = std::min<std::size_t>(
+    const std::size_t capacity_frames = static_cast<std::size_t>(header.capacity_frames);
+    const std::uint64_t earliest_frame = header.write_index_frames > header.capacity_frames
+        ? header.write_index_frames - header.capacity_frames
+        : 0;
+
+    std::uint64_t local_read_index = 0;
+    {
+        std::lock_guard<std::mutex> lock(read_state_mutex_);
+        if (!has_local_read_index_) {
+            const std::uint64_t initial_backfill = std::min<std::uint64_t>(header.write_index_frames, max_frames);
+            local_read_index_frames_ = header.write_index_frames - initial_backfill;
+            has_local_read_index_ = true;
+        }
+        if (local_read_index_frames_ < earliest_frame) {
+            local_read_index_frames_ = earliest_frame;
+        }
+        if (local_read_index_frames_ > header.write_index_frames) {
+            local_read_index_frames_ = header.write_index_frames;
+        }
+        local_read_index = local_read_index_frames_;
+    }
+
+    const std::size_t available_frames = std::min<std::uint64_t>(
         total_frames,
-        header.write_index_frames > header.read_index_frames
-            ? static_cast<std::size_t>(header.write_index_frames - header.read_index_frames)
+        header.write_index_frames > local_read_index
+            ? header.write_index_frames - local_read_index
             : 0);
     const std::size_t frames_to_copy = std::min(max_frames, available_frames);
-    const std::size_t capacity_frames = static_cast<std::size_t>(header.capacity_frames);
     const std::size_t start_frame = capacity_frames == 0
         ? 0
-        : static_cast<std::size_t>((header.write_index_frames - frames_to_copy) % capacity_frames);
+        : static_cast<std::size_t>(local_read_index % capacity_frames);
+    read_index_frames = local_read_index;
 
     for (std::size_t frame = 0; frame < frames_to_copy; ++frame) {
         const std::size_t source_frame = capacity_frames == 0
@@ -150,6 +186,10 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
         out_samples[frame] = 0.0f;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(read_state_mutex_);
+        local_read_index_frames_ = local_read_index + frames_to_copy;
+    }
     timestamp_ns = header.last_timestamp_ns;
     return frames_to_copy;
 }
