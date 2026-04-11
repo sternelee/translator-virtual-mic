@@ -145,23 +145,54 @@ impl EngineSession {
 
     fn output_frame_from_input(&self, frame: &AudioFrame) -> AudioFrame {
         let target_sample_rate = self.config.output_sample_rate;
-        if frame.sample_rate == target_sample_rate {
-            return frame.clone();
-        }
-
-        AudioFrame {
-            timestamp_ns: frame.timestamp_ns,
-            sample_rate: target_sample_rate,
-            channels: frame.channels,
-            data: resample_interleaved_linear(
-                &frame.data,
-                frame.frames(),
-                frame.channels,
-                frame.sample_rate,
-                target_sample_rate,
-            ),
-        }
+        let mut output_frame = if frame.sample_rate == target_sample_rate {
+            frame.clone()
+        } else {
+            AudioFrame {
+                timestamp_ns: frame.timestamp_ns,
+                sample_rate: target_sample_rate,
+                channels: frame.channels,
+                data: resample_interleaved_linear(
+                    &frame.data,
+                    frame.frames(),
+                    frame.channels,
+                    frame.sample_rate,
+                    target_sample_rate,
+                ),
+            }
+        };
+        apply_gain_and_limiter(
+            &mut output_frame.data,
+            self.config.input_gain_db,
+            self.config.limiter_threshold_db,
+        );
+        output_frame
     }
+}
+
+fn apply_gain_and_limiter(samples: &mut [f32], input_gain_db: f32, limiter_threshold_db: f32) {
+    let gain = db_to_linear(input_gain_db);
+    let threshold = db_to_linear(limiter_threshold_db).clamp(0.05, 0.999);
+    for sample in samples.iter_mut() {
+        let gained = *sample * gain;
+        *sample = soft_limit(gained, threshold);
+    }
+}
+
+fn db_to_linear(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+fn soft_limit(sample: f32, threshold: f32) -> f32 {
+    let abs = sample.abs();
+    if abs <= threshold {
+        return sample;
+    }
+
+    let sign = sample.signum();
+    let normalized = (abs - threshold) / (1.0 - threshold);
+    let compressed = threshold + (1.0 - threshold) * normalized.tanh();
+    sign * compressed.min(1.0)
 }
 
 fn resample_interleaved_linear(
@@ -225,5 +256,21 @@ mod tests {
 
         assert!(frames_read > input_samples.len());
         assert!(out.iter().take(frames_read).any(|sample| sample.abs() > 0.0));
+    }
+
+    #[test]
+    fn output_processing_applies_gain_and_limiter() {
+        let mut frame = AudioFrame {
+            timestamp_ns: 1,
+            sample_rate: 48_000,
+            channels: 1,
+            data: vec![0.25, 0.5, 0.75, 1.0],
+        };
+
+        apply_gain_and_limiter(&mut frame.data, 6.0, -6.0);
+
+        assert!(frame.data[0] > 0.25);
+        assert!(frame.data[3] < 1.0);
+        assert!(frame.data.iter().all(|sample| sample.abs() <= 1.0));
     }
 }

@@ -39,6 +39,8 @@ pub struct EngineConfig {
     pub input_sample_rate: u32,
     pub output_sample_rate: u32,
     pub channels: u16,
+    pub input_gain_db: f32,
+    pub limiter_threshold_db: f32,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -51,6 +53,8 @@ impl Default for EngineConfig {
             input_sample_rate: 48_000,
             output_sample_rate: 48_000,
             channels: 1,
+            input_gain_db: 0.0,
+            limiter_threshold_db: -1.0,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -68,9 +72,31 @@ impl EngineConfig {
         if raw.contains("\"target\":\"zh\"") || raw.contains("target = \"zh\"") {
             config.target_language = "zh".to_string();
         }
+        if let Some(input_gain_db) = extract_f32_value(raw, "input_gain_db") {
+            config.input_gain_db = input_gain_db;
+        }
+        if let Some(limiter_threshold_db) = extract_f32_value(raw, "limiter_threshold_db") {
+            config.limiter_threshold_db = limiter_threshold_db;
+        }
 
         config
     }
+}
+
+fn extract_f32_value(raw: &str, key: &str) -> Option<f32> {
+    let patterns = [format!("\"{key}\":"), format!("{key} = ")];
+    for pattern in patterns {
+        let start = raw.find(&pattern)? + pattern.len();
+        let value = raw[start..]
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
+            .collect::<String>();
+        if let Ok(parsed) = value.parse::<f32>() {
+            return Some(parsed);
+        }
+    }
+    None
 }
 
 #[derive(Clone, Debug)]

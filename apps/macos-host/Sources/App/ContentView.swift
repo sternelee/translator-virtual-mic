@@ -17,6 +17,24 @@ struct ContentView: View {
                         Text("Chinese").tag("zh")
                         Text("Japanese").tag("ja")
                     }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Input Gain")
+                            Spacer()
+                            Text(String(format: "%.1f dB", viewModel.inputGainDB))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $viewModel.inputGainDB, in: -6...18, step: 0.5)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Limiter Threshold")
+                            Spacer()
+                            Text(String(format: "%.1f dB", viewModel.limiterThresholdDB))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $viewModel.limiterThresholdDB, in: -18 ... -1, step: 0.5)
+                    }
                     Button("Refresh Devices") {
                         viewModel.refreshDevices()
                     }

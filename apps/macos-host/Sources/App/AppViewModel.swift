@@ -30,6 +30,8 @@ final class AppViewModel: ObservableObject {
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
     @Published var targetLanguage: String = "en"
+    @Published var inputGainDB: Double = 6.0
+    @Published var limiterThresholdDB: Double = -6.0
     @Published var microphonePermissionGranted: Bool = false
     @Published var inputLevel: Float = 0
     @Published var metricsJSON: String = "{}"
@@ -91,7 +93,14 @@ final class AppViewModel: ObservableObject {
     func startEngine() {
         stopEngine()
         appendLog("Starting engine with device UID: \(selectedDeviceUID ?? "nil")")
-        let engine = EngineBox(configJSON: "{\"target\":\"\(targetLanguage)\"}")
+        let configJSON = String(
+            format: #"{"target":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
+            targetLanguage,
+            inputGainDB,
+            limiterThresholdDB
+        )
+        appendLog("Engine config: \(configJSON)")
+        let engine = EngineBox(configJSON: configJSON)
         guard engine.start() == 0 else {
             statusText = "Failed"
             appendLog("engine_start failed: \(engine.lastError())")
