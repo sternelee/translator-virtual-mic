@@ -215,6 +215,20 @@ Missing:
 - signing/distribution-grade install path
 - conferencing app compatibility validation
 
+Current runtime blocker on 2026-04-11:
+
+- QuickTime now reaches HAL input-read callbacks:
+  - `BeginIOOperation`
+  - `DoIOOperation`
+- the installed plug-in repeatedly reports:
+  - `shared buffer unavailable at /tmp/translator_virtual_mic/shared_output.bin`
+- verifier output during active capture can show:
+  - `is_running=false`
+  - `is_running_somewhere=true`
+
+That means the active blocker is no longer enumeration or HAL callback wiring.
+The active blocker is that the host side is not producing a shared output file that the isolated driver helper can open at `/tmp/translator_virtual_mic/shared_output.bin`.
+
 ## Validation History
 
 ### Local validation that passes
@@ -244,6 +258,11 @@ Key fixes included:
 - Removing `AudioServerPlugIn_LoadingConditions` from `Info.plist`.
 - Implementing mandatory property handlers for `'rsrc'`, `'taps'`, and `'ctrl'`.
 - Handling permission issues during the rebuild/deploy cycle.
+
+Current debugging focus:
+- make host-side shared output creation failure explicit in the UI/logs
+- make Rust dylib loading robust when the macOS host app is launched outside the repo working directory
+- verify whether the host app is failing to load `libengine_api.dylib` or failing to create the shared buffer file after load
 
 ## Installation and Usage
 

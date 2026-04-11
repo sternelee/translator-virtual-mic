@@ -77,7 +77,32 @@ bool is_output_scope(const AudioObjectPropertyAddress *address) {
 
 bool is_stream_scope(const AudioObjectPropertyAddress *address) {
     return address != nullptr &&
-        (address->mScope == kAudioObjectPropertyScopeGlobal || address->mScope == kAudioObjectPropertyScopeWildcard);
+        (address->mScope == kAudioObjectPropertyScopeInput ||
+         address->mScope == kAudioObjectPropertyScopeOutput ||
+         address->mScope == kAudioObjectPropertyScopeGlobal ||
+         address->mScope == kAudioObjectPropertyScopeWildcard);
+}
+
+CFStringRef copy_element_name(const AudioObjectPropertyAddress *address) {
+    if (address == nullptr) {
+        return copy_cf_string("Main");
+    }
+
+    if (address->mSelector == kAudioObjectPropertyElementCategoryName) {
+        if (address->mScope == kAudioObjectPropertyScopeInput) {
+            return copy_cf_string("Input");
+        }
+        if (address->mScope == kAudioObjectPropertyScopeOutput) {
+            return copy_cf_string("Output");
+        }
+        return copy_cf_string("Main");
+    }
+
+    if (address->mSelector == kAudioObjectPropertyElementNumberName) {
+        return copy_cf_string("1");
+    }
+
+    return copy_cf_string("Main");
 }
 
 TranslatorVirtualMicDriver &driver_from_ref(const void *driver_ref) {
@@ -288,6 +313,7 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioObjectPropertyClass) ||
                 addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
+                addresses_match_selector(address, kAudioObjectPropertyModelName) ||
                 addresses_match_selector(address, kAudioObjectPropertyManufacturer) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwnedObjects) ||
                 addresses_match_selector(address, kAudioObjectPropertyName) ||
@@ -300,6 +326,10 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
                 addresses_match_selector(address, kAudioObjectPropertyName) ||
+                addresses_match_selector(address, kAudioObjectPropertyModelName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementCategoryName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementNumberName) ||
                 addresses_match_selector(address, kAudioObjectPropertyManufacturer) ||
                 addresses_match_selector(address, kAudioDevicePropertyDeviceUID) ||
                 addresses_match_selector(address, kAudioDevicePropertyModelUID) ||
@@ -336,6 +366,10 @@ Boolean TranslatorVirtualMicDriver::has_property(AudioObjectID object_id, const 
                 addresses_match_selector(address, kAudioObjectPropertyCustomPropertyInfoList) ||
                 addresses_match_selector(address, kAudioObjectPropertyOwner) ||
                 addresses_match_selector(address, kAudioObjectPropertyName) ||
+                addresses_match_selector(address, kAudioObjectPropertyModelName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementCategoryName) ||
+                addresses_match_selector(address, kAudioObjectPropertyElementNumberName) ||
                 addresses_match_selector(address, kAudioStreamPropertyIsActive) ||
                 addresses_match_selector(address, kAudioStreamPropertyDirection) ||
                 addresses_match_selector(address, kAudioStreamPropertyStartingChannel) ||
@@ -465,6 +499,10 @@ OSStatus TranslatorVirtualMicDriver::get_property_data_size(AudioObjectID object
             *out_data_size = 2 * sizeof(UInt32);
             break;
         case kAudioObjectPropertyName:
+        case kAudioObjectPropertyModelName:
+        case kAudioObjectPropertyElementName:
+        case kAudioObjectPropertyElementCategoryName:
+        case kAudioObjectPropertyElementNumberName:
         case kAudioObjectPropertyManufacturer:
         case kAudioDevicePropertyDeviceUID:
         case kAudioDevicePropertyModelUID:
@@ -687,6 +725,22 @@ OSStatus TranslatorVirtualMicDriver::get_property_data(AudioObjectID object_id, 
             *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(name);
             break;
         }
+        case kAudioObjectPropertyModelName: {
+            const char *name = kDeviceName;
+            if (object_id == kPluginObjectID) {
+                name = kPluginName;
+            } else if (object_id == kStreamObjectID) {
+                name = kStreamName;
+            }
+            *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(name);
+            break;
+        }
+        case kAudioObjectPropertyElementName:
+        case kAudioObjectPropertyElementCategoryName:
+        case kAudioObjectPropertyElementNumberName: {
+            *reinterpret_cast<CFStringRef *>(out_data) = copy_element_name(address);
+            break;
+        }
         case kAudioObjectPropertyManufacturer: {
             *reinterpret_cast<CFStringRef *>(out_data) = copy_cf_string(kManufacturerName);
             break;
@@ -816,6 +870,9 @@ OSStatus TranslatorVirtualMicDriver::do_io_operation(AudioObjectID device_object
     const UInt32 render_state = !result.source_available
         ? kRenderStateUnavailable
         : (!result.format_matches ? kRenderStateFormatMismatch : (result.frames_produced == 0 ? kRenderStateSilence : kRenderStateFlowing));
+    const unsigned long long unread_frames = result.write_index_frames >= result.read_index_frames
+        ? static_cast<unsigned long long>(result.write_index_frames - result.read_index_frames)
+        : 0ULL;
     
     switch (render_state) {
         case kRenderStateUnavailable:
@@ -825,10 +882,26 @@ OSStatus TranslatorVirtualMicDriver::do_io_operation(AudioObjectID device_object
             os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer format mismatch at %{public}s", render_source_.reader().file_path().c_str());
             break;
         case kRenderStateSilence:
-            // os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer readable but empty, zero-filling %u frames", io_buffer_frame_size);
+            os_log(
+                OS_LOG_DEFAULT,
+                "TranslatorVirtualMic: shared buffer readable but empty, zero-filling %u frames (write=%llu read=%llu unread=%llu)",
+                io_buffer_frame_size,
+                static_cast<unsigned long long>(result.write_index_frames),
+                static_cast<unsigned long long>(result.read_index_frames),
+                unread_frames
+            );
             break;
         case kRenderStateFlowing:
-            os_log(OS_LOG_DEFAULT, "TranslatorVirtualMic: shared buffer flowing, produced %zu frames at timestamp %llu", result.frames_produced, static_cast<unsigned long long>(result.timestamp_ns));
+            os_log(
+                OS_LOG_DEFAULT,
+                "TranslatorVirtualMic: shared buffer flowing, produced %zu/%u frames at timestamp %llu (write=%llu read=%llu unread=%llu)",
+                result.frames_produced,
+                io_buffer_frame_size,
+                static_cast<unsigned long long>(result.timestamp_ns),
+                static_cast<unsigned long long>(result.write_index_frames),
+                static_cast<unsigned long long>(result.read_index_frames),
+                unread_frames
+            );
             break;
     }
 

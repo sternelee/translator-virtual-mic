@@ -7,3 +7,4 @@ DerivedData
 *.so
 *.dll
 native/macos/build/
+.omx/

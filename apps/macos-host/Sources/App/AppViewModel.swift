@@ -101,8 +101,20 @@ final class AppViewModel: ObservableObject {
         _ = engine.setTargetLanguage(targetLanguage)
         let sharedResult = engine.enableSharedOutput(capacityFrames: 14_400, channels: 1, sampleRate: 48_000)
         appendLog("enableSharedOutput result: \(sharedResult)")
+        if sharedResult != 0 {
+            _ = engine.stop()
+            statusText = "Failed"
+            appendLog("enableSharedOutput failed: \(engine.lastError())")
+            return
+        }
         sharedOutputPath = engine.sharedOutputPath()
         appendLog("sharedOutputPath: \(sharedOutputPath)")
+        if sharedOutputPath.isEmpty {
+            _ = engine.stop()
+            statusText = "Failed"
+            appendLog("sharedOutputPath is empty after enabling shared output")
+            return
+        }
         refreshSharedBufferStatus(logOnChange: true)
 
         do {
@@ -243,6 +255,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func appendLog(_ message: String) {
+        fputs("[TranslatorVirtualMicHost] \(message)\n", stderr)
         logLines.append(message)
         if logLines.count > 200 {
             logLines.removeFirst(logLines.count - 200)

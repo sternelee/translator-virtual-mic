@@ -95,6 +95,21 @@ int main() {
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
+    AudioObjectPropertyAddress model_name = {
+        kAudioObjectPropertyModelName,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectPropertyAddress element_category_name = {
+        kAudioObjectPropertyElementCategoryName,
+        kAudioObjectPropertyScopeInput,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectPropertyAddress stream_tap_list = {
+        'taps',
+        kAudioObjectPropertyScopeInput,
+        kAudioObjectPropertyElementMain
+    };
     AudioObjectPropertyAddress translate_uid = {
         kAudioPlugInPropertyTranslateUIDToDevice,
         kAudioObjectPropertyScopeGlobal,
@@ -121,6 +136,10 @@ int main() {
     require_status(driver.get_property_data_size(TranslatorVirtualMicDriver::kStreamObjectID, &stream_owned_objects, 0, nullptr, &size), "stream owned objects size");
     std::cout << "stream_owned_objects_size=" << size << std::endl;
     require(size == 0, "stream owned objects should be empty");
+
+    require(driver.has_property(TranslatorVirtualMicDriver::kDeviceObjectID, &model_name), "device model name should be supported");
+    require(driver.has_property(TranslatorVirtualMicDriver::kDeviceObjectID, &element_category_name), "device element category name should be supported");
+    require(driver.has_property(TranslatorVirtualMicDriver::kStreamObjectID, &stream_tap_list), "stream tap list should be supported for input scope");
 
     AudioBufferList input_config = {};
     UInt32 out_size = 0;
@@ -183,6 +202,16 @@ int main() {
     require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &device_can_be_default_system_device, 0, nullptr, sizeof(can_be_default_system_device), &out_size, &can_be_default_system_device), "device can be default system device");
     std::cout << "device_can_be_default_system_device=" << can_be_default_system_device << std::endl;
     require(can_be_default_system_device == 0, "input-only virtual mic should not be a default system output device");
+
+    CFStringRef model_name_value = nullptr;
+    require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &model_name, 0, nullptr, sizeof(model_name_value), &out_size, &model_name_value), "device model name");
+    require(model_name_value != nullptr, "device model name should not be null");
+    CFRelease(model_name_value);
+
+    CFStringRef element_category_name_value = nullptr;
+    require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &element_category_name, 0, nullptr, sizeof(element_category_name_value), &out_size, &element_category_name_value), "device element category name");
+    require(element_category_name_value != nullptr, "device element category name should not be null");
+    CFRelease(element_category_name_value);
 
     require_status(driver.stop_io(TranslatorVirtualMicDriver::kDeviceObjectID, 1), "stop io");
     require_status(driver.get_property_data(TranslatorVirtualMicDriver::kDeviceObjectID, &device_is_running, 0, nullptr, sizeof(running_value), &out_size, &running_value), "device running after stop");

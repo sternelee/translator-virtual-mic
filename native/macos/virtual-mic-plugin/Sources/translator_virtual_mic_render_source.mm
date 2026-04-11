@@ -20,6 +20,8 @@ TranslatorVirtualMicRenderResult TranslatorVirtualMicRenderSource::render(float 
     result.frames_produced = 0;
     result.frames_silence_filled = max_frames;
     result.timestamp_ns = 0;
+    result.write_index_frames = 0;
+    result.read_index_frames = 0;
     result.source_available = false;
     result.format_matches = false;
 
@@ -34,6 +36,8 @@ TranslatorVirtualMicRenderResult TranslatorVirtualMicRenderSource::render(float 
     }
 
     result.source_available = true;
+    result.write_index_frames = header.write_index_frames;
+    result.read_index_frames = header.read_index_frames;
     result.format_matches = validate_format(header);
     if (!result.format_matches) {
         std::fill(out_samples, out_samples + max_frames, 0.0f);

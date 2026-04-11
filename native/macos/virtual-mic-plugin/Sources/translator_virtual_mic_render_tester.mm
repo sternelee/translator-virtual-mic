@@ -27,6 +27,8 @@ int main(int argc, char **argv) {
     std::cout << "source_available=" << (result.source_available ? "true" : "false") << '\n';
     std::cout << "format_matches=" << (result.format_matches ? "true" : "false") << '\n';
     std::cout << "read_index_after_render=" << (consumed_header_ok ? consumed_header.read_index_frames : 0) << '\n';
+    std::cout << "write_index_at_render=" << result.write_index_frames << '\n';
+    std::cout << "read_index_at_render=" << result.read_index_frames << '\n';
     std::cout << "first_samples=";
     for (std::size_t index = 0; index < std::min<std::size_t>(samples.size(), 8); ++index) {
         if (index > 0) {
@@ -40,7 +42,7 @@ int main(int argc, char **argv) {
             result.source_available &&
             result.format_matches &&
             consumed_header_ok &&
-            consumed_header.read_index_frames >= result.frames_produced
+            result.frames_produced > 0
         ? EXIT_SUCCESS
         : EXIT_FAILURE;
 }

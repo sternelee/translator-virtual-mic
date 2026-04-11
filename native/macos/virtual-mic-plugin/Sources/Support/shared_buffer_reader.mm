@@ -39,11 +39,6 @@ float read_f32_le(const unsigned char *data) {
     return value;
 }
 
-void write_u64_le(char *data, std::uint64_t value) {
-    for (std::size_t index = 0; index < 8; ++index) {
-        data[index] = static_cast<char>((value >> (index * 8U)) & 0xFFU);
-    }
-}
 } // namespace
 
 SharedBufferReader::SharedBufferReader(std::string file_path)
@@ -85,16 +80,16 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
         return 0;
     }
 
-    std::fstream io(file_path_, std::ios::binary | std::ios::in | std::ios::out);
-    if (!io.is_open()) {
+    std::ifstream input(file_path_, std::ios::binary);
+    if (!input.is_open()) {
         timestamp_ns = 0;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
     }
 
     unsigned char header_bytes[header_size_bytes()] = {};
-    io.read(reinterpret_cast<char *>(header_bytes), static_cast<std::streamsize>(sizeof(header_bytes)));
-    if (io.gcount() != static_cast<std::streamsize>(sizeof(header_bytes))) {
+    input.read(reinterpret_cast<char *>(header_bytes), static_cast<std::streamsize>(sizeof(header_bytes)));
+    if (input.gcount() != static_cast<std::streamsize>(sizeof(header_bytes))) {
         timestamp_ns = 0;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
@@ -121,8 +116,8 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
     const std::size_t channels = std::max<std::size_t>(header.channel_count, 1);
     const std::size_t sample_count = static_cast<std::size_t>(header.capacity_frames) * channels;
     std::vector<unsigned char> bytes(sample_count * sizeof(float));
-    io.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (io.gcount() != static_cast<std::streamsize>(bytes.size())) {
+    input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
         timestamp_ns = header.last_timestamp_ns;
         std::fill(out_samples, out_samples + max_frames, 0.0f);
         return 0;
@@ -140,27 +135,20 @@ std::size_t SharedBufferReader::consume_mono_frames(float *out_samples, std::siz
             ? static_cast<std::size_t>(header.write_index_frames - header.read_index_frames)
             : 0);
     const std::size_t frames_to_copy = std::min(max_frames, available_frames);
-    const std::size_t start_frame = header.capacity_frames == 0
+    const std::size_t capacity_frames = static_cast<std::size_t>(header.capacity_frames);
+    const std::size_t start_frame = capacity_frames == 0
         ? 0
-        : static_cast<std::size_t>(header.read_index_frames % header.capacity_frames);
+        : static_cast<std::size_t>((header.write_index_frames - frames_to_copy) % capacity_frames);
 
     for (std::size_t frame = 0; frame < frames_to_copy; ++frame) {
-        const std::size_t source_frame = header.capacity_frames == 0
+        const std::size_t source_frame = capacity_frames == 0
             ? frame
-            : (start_frame + frame) % static_cast<std::size_t>(header.capacity_frames);
+            : (start_frame + frame) % capacity_frames;
         out_samples[frame] = samples[source_frame * channels];
     }
     for (std::size_t frame = frames_to_copy; frame < max_frames; ++frame) {
         out_samples[frame] = 0.0f;
     }
-
-    header.read_index_frames += static_cast<std::uint64_t>(frames_to_copy);
-    char read_index_bytes[sizeof(std::uint64_t)] = {};
-    write_u64_le(read_index_bytes, header.read_index_frames);
-    io.clear();
-    io.seekp(static_cast<std::streamoff>((6 * sizeof(std::uint32_t)) + sizeof(std::uint64_t)), std::ios::beg);
-    io.write(read_index_bytes, static_cast<std::streamsize>(sizeof(read_index_bytes)));
-    io.flush();
 
     timestamp_ns = header.last_timestamp_ns;
     return frames_to_copy;

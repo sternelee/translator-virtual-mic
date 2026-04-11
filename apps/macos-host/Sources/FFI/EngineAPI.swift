@@ -42,12 +42,25 @@ final class EngineRuntime {
     private let dylibHandle: UnsafeMutableRawPointer
 
     static func load() throws -> EngineRuntime {
-        let dylibPath = ProcessInfo.processInfo.environment["TRANSLATOR_ENGINE_DYLIB"]
-            ?? "../../../target/debug/libengine_api.dylib"
+        let candidates = dylibCandidates()
+        var errors: [String] = []
+        var loadedHandle: UnsafeMutableRawPointer?
 
-        guard let handle = dlopen(dylibPath, RTLD_NOW | RTLD_LOCAL) else {
-            let message = String(cString: dlerror())
-            throw EngineLoaderError.openFailed("dlopen failed for \(dylibPath): \(message)")
+        for path in candidates {
+            guard FileManager.default.fileExists(atPath: path) else {
+                errors.append("missing: \(path)")
+                continue
+            }
+            if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
+                loadedHandle = handle
+                break
+            }
+            let message = dlerror().map { String(cString: $0) } ?? "unknown dlopen error"
+            errors.append("dlopen failed for \(path): \(message)")
+        }
+
+        guard let handle = loadedHandle else {
+            throw EngineLoaderError.openFailed("unable to load libengine_api.dylib. Tried:\n\(errors.joined(separator: "\n"))")
         }
 
         func loadSymbol<T>(_ name: String, as type: T.Type) throws -> T {
@@ -70,6 +83,38 @@ final class EngineRuntime {
             metricsJson: loadSymbol("engine_get_metrics_json", as: MetricsJsonFn.self),
             sharedOutputPath: loadSymbol("engine_get_shared_output_path", as: SharedOutputPathFn.self)
         )
+    }
+
+    private static func dylibCandidates() -> [String] {
+        var candidates: [String] = []
+        let fm = FileManager.default
+
+        if let envPath = ProcessInfo.processInfo.environment["TRANSLATOR_ENGINE_DYLIB"], !envPath.isEmpty {
+            candidates.append(envPath)
+        }
+
+        let cwd = fm.currentDirectoryPath
+        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("target/debug/libengine_api.dylib").path)
+        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("../../../target/debug/libengine_api.dylib").path)
+
+        if let executableURL = Bundle.main.executableURL {
+            let executableDir = executableURL.deletingLastPathComponent()
+            candidates.append(executableDir.appendingPathComponent("libengine_api.dylib").path)
+            candidates.append(executableDir.appendingPathComponent("../libengine_api.dylib").standardized.path)
+            candidates.append(executableDir.appendingPathComponent("../../../libengine_api.dylib").standardized.path)
+            candidates.append(executableDir.appendingPathComponent("../../../../../target/debug/libengine_api.dylib").standardized.path)
+        }
+
+        let sourceFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = sourceFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        candidates.append(repoRoot.appendingPathComponent("target/debug/libengine_api.dylib").path)
+
+        return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
     }
 
     private init(
