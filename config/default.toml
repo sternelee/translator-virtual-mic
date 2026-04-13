@@ -16,7 +16,7 @@ source = "auto"
 target = "en"
 
 [translation]
-provider = "azure_voice_live"
+provider = "openai_realtime"
 
 [azure_voice_live]
 endpoint = "https://your-resource.cognitiveservices.azure.com"
@@ -25,6 +25,15 @@ model = "gpt-realtime"
 api_key_env = "AZURE_VOICELIVE_API_KEY"
 voice_name = "en-US-Ava:DragonHDLatestNeural"
 voice_type = "azure-standard"
+source_locale = "auto"
+target_locale = "en-US"
+enable_server_vad = true
+
+[openai_realtime]
+endpoint = "wss://api.openai.com/v1/realtime"
+model = "gpt-realtime"
+api_key_env = "OPENAI_API_KEY"
+voice_name = "marin"
 source_locale = "auto"
 target_locale = "en-US"
 enable_server_vad = true

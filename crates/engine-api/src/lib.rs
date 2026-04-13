@@ -33,7 +33,11 @@ impl EngineHandle {
     }
 
     fn update_metrics_cache(&self) {
-        let metrics = self.session.lock().expect("session poisoned").metrics_json();
+        let metrics = self
+            .session
+            .lock()
+            .expect("session poisoned")
+            .metrics_json();
         *self.metrics_json.lock().expect("metrics poisoned") = cstring_clean(&metrics);
     }
 
@@ -63,6 +67,16 @@ impl EngineHandle {
                     state.last_response_id,
                     state.last_item_id
                 )
+            } else if let Some(state) = session.openai_realtime_state() {
+                format!(
+                    "{{\"audio_delta_count\":{},\"audio_done_count\":{},\"transcript_delta_count\":{},\"translated_audio_samples\":{},\"last_response_id\":\"{}\",\"last_item_id\":\"{}\"}}",
+                    state.audio_delta_count,
+                    state.audio_done_count,
+                    state.transcript_delta_count,
+                    state.translated_audio_samples,
+                    state.last_response_id,
+                    state.last_item_id
+                )
             } else {
                 "{}".to_string()
             }
@@ -83,10 +97,15 @@ fn read_optional_cstr(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
     }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
-fn with_handle<T>(handle: *mut EngineHandle, f: impl FnOnce(&EngineHandle) -> Result<T, String>) -> Result<T, i32> {
+fn with_handle<T>(
+    handle: *mut EngineHandle,
+    f: impl FnOnce(&EngineHandle) -> Result<T, String>,
+) -> Result<T, i32> {
     if handle.is_null() {
         return Err(-1);
     }
@@ -144,7 +163,10 @@ pub extern "C" fn engine_stop(handle: *mut EngineHandle) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn engine_set_target_language(handle: *mut EngineHandle, lang: *const c_char) -> i32 {
+pub extern "C" fn engine_set_target_language(
+    handle: *mut EngineHandle,
+    lang: *const c_char,
+) -> i32 {
     with_handle(handle, |handle| {
         let lang = read_optional_cstr(lang);
         handle
@@ -162,7 +184,11 @@ pub extern "C" fn engine_set_target_language(handle: *mut EngineHandle, lang: *c
 pub extern "C" fn engine_set_mode(handle: *mut EngineHandle, mode: i32) -> i32 {
     with_handle(handle, |handle| {
         let mode = EngineMode::from_i32(mode).ok_or_else(|| "invalid engine mode".to_string())?;
-        handle.session.lock().expect("session poisoned").set_mode(mode);
+        handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .set_mode(mode);
         Ok(())
     })
     .map(|_| 0)
@@ -184,7 +210,11 @@ pub extern "C" fn engine_enable_shared_output(
             .session
             .lock()
             .expect("session poisoned")
-            .enable_shared_output(capacity_frames as usize, channels as u16, sample_rate as u32)
+            .enable_shared_output(
+                capacity_frames as usize,
+                channels as u16,
+                sample_rate as u32,
+            )
             .map_err(|err| err.to_string())?;
         handle.update_shared_output_path_cache();
         Ok(())
@@ -216,7 +246,13 @@ pub extern "C" fn engine_push_input_pcm(
             .session
             .lock()
             .expect("session poisoned")
-            .push_input_pcm(slice, frame_count as usize, channels as u16, sample_rate as u32, timestamp_ns)
+            .push_input_pcm(
+                slice,
+                frame_count as usize,
+                channels as u16,
+                sample_rate as u32,
+                timestamp_ns,
+            )
             .map_err(|err| err.to_string())?;
         handle.update_metrics_cache();
         Ok(())
@@ -304,7 +340,11 @@ pub extern "C" fn engine_get_last_error(handle: *mut EngineHandle) -> *const c_c
         return ptr::null();
     }
     let handle = unsafe { &*handle };
-    handle.last_error.lock().expect("last_error poisoned").as_ptr()
+    handle
+        .last_error
+        .lock()
+        .expect("last_error poisoned")
+        .as_ptr()
 }
 
 #[no_mangle]
@@ -314,7 +354,11 @@ pub extern "C" fn engine_get_metrics_json(handle: *mut EngineHandle) -> *const c
     }
     let handle = unsafe { &*handle };
     handle.update_metrics_cache();
-    handle.metrics_json.lock().expect("metrics poisoned").as_ptr()
+    handle
+        .metrics_json
+        .lock()
+        .expect("metrics poisoned")
+        .as_ptr()
 }
 
 #[no_mangle]
@@ -369,7 +413,10 @@ pub extern "C" fn engine_take_next_translation_event(
 }
 
 #[no_mangle]
-pub extern "C" fn engine_ingest_translation_event(handle: *mut EngineHandle, event_json: *const c_char) -> i32 {
+pub extern "C" fn engine_ingest_translation_event(
+    handle: *mut EngineHandle,
+    event_json: *const c_char,
+) -> i32 {
     with_handle(handle, |handle| {
         let event_json = read_optional_cstr(event_json);
         if event_json.is_empty() {

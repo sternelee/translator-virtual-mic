@@ -1,4 +1,5 @@
 pub mod azure_voice_live;
+pub mod openai_realtime;
 
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use metrics::EngineMetrics;
 use output_bridge::{SharedBufferSnapshot, SharedOutputBuffer};
 
 pub use azure_voice_live::{AzureVoiceLiveBridge, AzureVoiceLivePlan, AzureVoiceLiveRuntimeState};
+pub use openai_realtime::{OpenAIRealtimeBridge, OpenAIRealtimePlan, OpenAIRealtimeRuntimeState};
 
 pub struct EngineSession {
     config: EngineConfig,
@@ -16,14 +18,23 @@ pub struct EngineSession {
     output_ring: Arc<SampleRingBuffer>,
     shared_output: Option<Arc<SharedOutputBuffer>>,
     azure_voice_live: Option<AzureVoiceLiveBridge>,
+    openai_realtime: Option<OpenAIRealtimeBridge>,
     running: bool,
 }
 
 impl EngineSession {
     pub fn new(config: EngineConfig) -> Self {
         let channels = config.channels.max(1);
-        let input_ring = Arc::new(SampleRingBuffer::new(48_000, channels, config.input_sample_rate));
-        let output_ring = Arc::new(SampleRingBuffer::new(48_000, channels, config.output_sample_rate));
+        let input_ring = Arc::new(SampleRingBuffer::new(
+            48_000,
+            channels,
+            config.input_sample_rate,
+        ));
+        let output_ring = Arc::new(SampleRingBuffer::new(
+            48_000,
+            channels,
+            config.output_sample_rate,
+        ));
         Self {
             config,
             metrics: Arc::new(EngineMetrics::default()),
@@ -31,6 +42,7 @@ impl EngineSession {
             output_ring,
             shared_output: None,
             azure_voice_live: None,
+            openai_realtime: None,
             running: false,
         }
     }
@@ -44,6 +56,7 @@ impl EngineSession {
     pub fn stop(&mut self) {
         self.running = false;
         self.azure_voice_live = None;
+        self.openai_realtime = None;
     }
 
     pub fn set_target_language(&mut self, lang: &str) {
@@ -57,12 +70,25 @@ impl EngineSession {
         }
     }
 
-    pub fn enable_shared_output(&mut self, capacity_frames: usize, channels: u16, sample_rate: u32) -> Result<()> {
-        self.shared_output = Some(Arc::new(SharedOutputBuffer::new(capacity_frames, channels, sample_rate)?));
+    pub fn enable_shared_output(
+        &mut self,
+        capacity_frames: usize,
+        channels: u16,
+        sample_rate: u32,
+    ) -> Result<()> {
+        self.shared_output = Some(Arc::new(SharedOutputBuffer::new(
+            capacity_frames,
+            channels,
+            sample_rate,
+        )?));
         Ok(())
     }
 
-    pub fn read_shared_output_pcm(&self, out_samples: &mut [f32], channels: u16) -> Result<(usize, u64)> {
+    pub fn read_shared_output_pcm(
+        &self,
+        out_samples: &mut [f32],
+        channels: u16,
+    ) -> Result<(usize, u64)> {
         let shared_output = self
             .shared_output
             .as_ref()
@@ -114,6 +140,9 @@ impl EngineSession {
                 if let Some(bridge) = &mut self.azure_voice_live {
                     bridge.queue_input_audio_f32(&frame.data, frame.sample_rate);
                 }
+                if let Some(bridge) = &mut self.openai_realtime {
+                    bridge.queue_input_audio_f32(&frame.data, frame.sample_rate);
+                }
             }
             EngineMode::CaptionOnly | EngineMode::MuteOnFailure => {}
         }
@@ -147,7 +176,8 @@ impl EngineSession {
         let depth_ms = if self.output_ring.sample_rate() == 0 {
             0
         } else {
-            ((self.output_ring.available_frames() as u64) * 1000) / u64::from(self.output_ring.sample_rate())
+            ((self.output_ring.available_frames() as u64) * 1000)
+                / u64::from(self.output_ring.sample_rate())
         };
         self.metrics.to_json(depth_ms)
     }
@@ -165,22 +195,41 @@ impl EngineSession {
     }
 
     pub fn take_next_azure_voice_live_event(&mut self) -> Result<Option<String>> {
-        let bridge = self
-            .azure_voice_live
-            .as_mut()
-            .ok_or_else(|| EngineError::new("azure voice live bridge is not active"))?;
-        Ok(bridge.take_next_event())
+        if let Some(bridge) = self.azure_voice_live.as_mut() {
+            return Ok(bridge.take_next_event());
+        }
+        if let Some(bridge) = self.openai_realtime.as_mut() {
+            return Ok(bridge.take_next_event());
+        }
+        Err(EngineError::new("translation bridge is not active"))
     }
 
     pub fn ingest_azure_voice_live_server_event(&mut self, raw_event: &str) -> Result<usize> {
-        let bridge = self
-            .azure_voice_live
-            .as_mut()
-            .ok_or_else(|| EngineError::new("azure voice live bridge is not active"))?;
-        let Some(samples) = bridge.ingest_server_event(raw_event)? else {
-            return Ok(0);
+        if let Some(bridge) = self.openai_realtime.as_mut() {
+            let (samples, timestamp_ns) = {
+                let Some(samples) = bridge.ingest_server_event(raw_event)? else {
+                    return Ok(0);
+                };
+                (samples, bridge.state().translated_audio_samples)
+            };
+            return self.push_translated_output(samples, timestamp_ns);
+        }
+
+        let (samples, timestamp_ns) = {
+            let bridge = self
+                .azure_voice_live
+                .as_mut()
+                .ok_or_else(|| EngineError::new("translation bridge is not active"))?;
+            let Some(samples) = bridge.ingest_server_event(raw_event)? else {
+                return Ok(0);
+            };
+            (samples, bridge.state().translated_audio_samples)
         };
 
+        self.push_translated_output(samples, timestamp_ns)
+    }
+
+    fn push_translated_output(&mut self, samples: Vec<f32>, timestamp_ns: u64) -> Result<usize> {
         let output_data = if self.config.output_sample_rate == 24_000 {
             samples
         } else {
@@ -193,7 +242,7 @@ impl EngineSession {
             )
         };
         let output_frame = AudioFrame {
-            timestamp_ns: bridge.state().translated_audio_samples,
+            timestamp_ns,
             sample_rate: self.config.output_sample_rate,
             channels: 1,
             data: output_data,
@@ -210,14 +259,33 @@ impl EngineSession {
     }
 
     pub fn azure_voice_live_state(&self) -> Option<&AzureVoiceLiveRuntimeState> {
-        self.azure_voice_live.as_ref().map(AzureVoiceLiveBridge::state)
+        self.azure_voice_live
+            .as_ref()
+            .map(AzureVoiceLiveBridge::state)
+    }
+
+    pub fn openai_realtime_state(&self) -> Option<&OpenAIRealtimeRuntimeState> {
+        self.openai_realtime
+            .as_ref()
+            .map(OpenAIRealtimeBridge::state)
     }
 
     fn sync_translation_bridge(&mut self) -> Result<()> {
-        if self.config.mode == EngineMode::Translate && self.config.translation_provider == TranslationProvider::AzureVoiceLive {
-            self.azure_voice_live = Some(AzureVoiceLiveBridge::from_config(&self.config)?);
-        } else {
-            self.azure_voice_live = None;
+        self.azure_voice_live = None;
+        self.openai_realtime = None;
+
+        if self.config.mode != EngineMode::Translate {
+            return Ok(());
+        }
+
+        match self.config.translation_provider {
+            TranslationProvider::AzureVoiceLive => {
+                self.azure_voice_live = Some(AzureVoiceLiveBridge::from_config(&self.config)?);
+            }
+            TranslationProvider::OpenAIRealtime => {
+                self.openai_realtime = Some(OpenAIRealtimeBridge::from_config(&self.config)?);
+            }
+            TranslationProvider::None => {}
         }
         Ok(())
     }
@@ -285,24 +353,31 @@ fn resample_interleaved_linear(
     if frame_count == 0 || samples.is_empty() {
         return Vec::new();
     }
-    if input_sample_rate == 0 || output_sample_rate == 0 || input_sample_rate == output_sample_rate {
+    if input_sample_rate == 0 || output_sample_rate == 0 || input_sample_rate == output_sample_rate
+    {
         return samples.to_vec();
     }
 
-    let output_frame_count = ((frame_count as u64 * output_sample_rate as u64) / input_sample_rate as u64)
+    let output_frame_count = ((frame_count as u64 * output_sample_rate as u64)
+        / input_sample_rate as u64)
         .max(1) as usize;
     let mut output = vec![0.0f32; output_frame_count.saturating_mul(channel_count)];
 
     for output_frame_index in 0..output_frame_count {
-        let source_position = (output_frame_index as f64) * (input_sample_rate as f64) / (output_sample_rate as f64);
+        let source_position =
+            (output_frame_index as f64) * (input_sample_rate as f64) / (output_sample_rate as f64);
         let left_frame_index = source_position.floor() as usize;
-        let right_frame_index = left_frame_index.min(frame_count.saturating_sub(1)).saturating_add(1).min(frame_count.saturating_sub(1));
+        let right_frame_index = left_frame_index
+            .min(frame_count.saturating_sub(1))
+            .saturating_add(1)
+            .min(frame_count.saturating_sub(1));
         let fraction = (source_position - left_frame_index as f64) as f32;
 
         for channel_index in 0..channel_count {
             let left = samples[left_frame_index.saturating_mul(channel_count) + channel_index];
             let right = samples[right_frame_index.saturating_mul(channel_count) + channel_index];
-            output[output_frame_index.saturating_mul(channel_count) + channel_index] = left + ((right - left) * fraction);
+            output[output_frame_index.saturating_mul(channel_count) + channel_index] =
+                left + ((right - left) * fraction);
         }
     }
 
@@ -331,10 +406,15 @@ mod tests {
             .expect("push input");
 
         let mut out = vec![0.0f32; 32];
-        let (frames_read, _) = session.read_shared_output_pcm(&mut out, 1).expect("read shared output");
+        let (frames_read, _) = session
+            .read_shared_output_pcm(&mut out, 1)
+            .expect("read shared output");
 
         assert!(frames_read > input_samples.len());
-        assert!(out.iter().take(frames_read).any(|sample| sample.abs() > 0.0));
+        assert!(out
+            .iter()
+            .take(frames_read)
+            .any(|sample| sample.abs() > 0.0));
     }
 
     #[test]
@@ -404,6 +484,54 @@ mod tests {
             .expect("ingest event");
         assert!(frames > 0);
         let state = session.azure_voice_live_state().expect("state");
+        assert_eq!(state.audio_delta_count, 1);
+    }
+
+    #[test]
+    fn translate_mode_queues_and_ingests_openai_events() {
+        let mut session = EngineSession::new(EngineConfig::from_json_lossy(
+            r#"{
+                "translation_provider":"openai_realtime",
+                "openai_realtime_endpoint":"wss://api.openai.com/v1/realtime",
+                "openai_realtime_model":"gpt-realtime",
+                "openai_realtime_api_key":"test-key",
+                "openai_realtime_voice_name":"alloy",
+                "openai_realtime_source_locale":"auto",
+                "openai_realtime_target_locale":"en-US"
+            }"#,
+        ));
+        session.set_mode(EngineMode::Translate);
+        session
+            .enable_shared_output(960, 1, 48_000)
+            .expect("enable shared output");
+        session.start().expect("start");
+
+        let bootstrap = session
+            .take_next_azure_voice_live_event()
+            .expect("take event")
+            .expect("session update");
+        assert!(bootstrap.contains("\"type\":\"session.update\""));
+
+        session
+            .push_input_pcm(&[0.0, 0.25, -0.25, 0.5], 4, 1, 48_000, 1)
+            .expect("push input");
+        let append_event = session
+            .take_next_azure_voice_live_event()
+            .expect("take event")
+            .expect("audio append");
+        assert!(append_event.contains("\"type\":\"input_audio_buffer.append\""));
+
+        let event = r#"{
+            "type":"response.output_audio.delta",
+            "response_id":"resp_1",
+            "item_id":"item_1",
+            "delta":"AAABAA=="
+        }"#;
+        let frames = session
+            .ingest_azure_voice_live_server_event(event)
+            .expect("ingest event");
+        assert!(frames > 0);
+        let state = session.openai_realtime_state().expect("state");
         assert_eq!(state.audio_delta_count, 1);
     }
 }

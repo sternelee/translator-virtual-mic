@@ -12,7 +12,11 @@ struct ContentView: View {
                         Text("Input Level")
                         ProgressView(value: Double(viewModel.inputLevel), total: 1.0)
                     }
-                    Toggle("Azure Live Translation", isOn: $viewModel.useAzureLiveTranslation)
+                    Picker("Translation Provider", selection: $viewModel.selectedTranslationProvider) {
+                        ForEach(TranslationServiceProvider.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
+                        }
+                    }
                     Picker("Target Language", selection: $viewModel.targetLanguage) {
                         Text("English").tag("en")
                         Text("Chinese").tag("zh")

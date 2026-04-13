@@ -70,6 +70,31 @@ cargo run -p demo-cli
 ./native/macos/scripts/build-plugin-bundle.sh
 ```
 
+## Realtime Providers
+
+The macOS host can now start either OpenAI Realtime or Azure Voice Live from the provider picker.
+
+OpenAI env vars:
+
+```bash
+export OPENAI_API_KEY=...
+export OPENAI_REALTIME_MODEL=gpt-realtime
+export OPENAI_REALTIME_VOICE_NAME=marin
+```
+
+Optional:
+
+```bash
+export OPENAI_REALTIME_ENDPOINT=wss://api.openai.com/v1/realtime
+```
+
+Azure env vars still work:
+
+```bash
+export AZURE_VOICELIVE_ENDPOINT=...
+export AZURE_VOICELIVE_API_KEY=...
+```
+
 ## HAL Smoke Verifier
 
 The verifier defaults to an install-time strict check when the target device is found.

@@ -22,6 +22,25 @@ struct SharedBufferMonitorSnapshot {
     )
 }
 
+enum TranslationServiceProvider: String, CaseIterable, Identifiable {
+    case none = "none"
+    case openAIRealtime = "openai_realtime"
+    case azureVoiceLive = "azure_voice_live"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .none:
+            "Off"
+        case .openAIRealtime:
+            "OpenAI Realtime"
+        case .azureVoiceLive:
+            "Azure Voice Live"
+        }
+    }
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var devices: [AudioDevice] = []
@@ -29,7 +48,7 @@ final class AppViewModel: ObservableObject {
     @Published var selectedDeviceUID: String?
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
-    @Published var useAzureLiveTranslation: Bool = false
+    @Published var selectedTranslationProvider: TranslationServiceProvider = .openAIRealtime
     @Published var targetLanguage: String = "en"
     @Published var inputGainDB: Double = 6.0
     @Published var limiterThresholdDB: Double = -6.0
@@ -42,6 +61,7 @@ final class AppViewModel: ObservableObject {
 
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
+    private let openAIRealtimeService = OpenAIRealtimeService()
     private var engine: EngineBox?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
@@ -106,7 +126,7 @@ final class AppViewModel: ObservableObject {
         }
 
         _ = engine.setTargetLanguage(targetLanguage)
-        _ = engine.setMode(useAzureLiveTranslation ? .translate : .bypass)
+        _ = engine.setMode(selectedTranslationProvider == .none ? .bypass : .translate)
         let sharedResult = engine.enableSharedOutput(capacityFrames: 14_400, channels: 1, sampleRate: 48_000)
         appendLog("enableSharedOutput result: \(sharedResult)")
         if sharedResult != 0 {
@@ -166,15 +186,14 @@ final class AppViewModel: ObservableObject {
         if !sharedOutputPath.isEmpty {
             appendLog("Shared output file: \(sharedOutputPath)")
         }
-        if useAzureLiveTranslation {
-            startAzureVoiceLive(using: engine)
-        }
+        startTranslationService(using: engine)
         startSharedBufferMonitor()
     }
 
     func stopEngine() {
         captureService.stop()
         azureVoiceLiveService.stop()
+        openAIRealtimeService.stop()
         stopSharedBufferMonitor()
         guard let engine else { return }
         _ = engine.stop()
@@ -199,26 +218,44 @@ final class AppViewModel: ObservableObject {
             "en-US"
         }
 
-        let endpoint = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_ENDPOINT"] ?? ""
-        let model = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_MODEL"] ?? "gpt-realtime"
-        let voiceName = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_VOICE_NAME"]
+        let azureEndpoint = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_ENDPOINT"] ?? ""
+        let azureModel = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_MODEL"] ?? "gpt-realtime"
+        let azureVoiceName = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_VOICE_NAME"]
             ?? (targetLanguage == "zh" ? "zh-CN-XiaoxiaoNeural" : targetLanguage == "ja" ? "ja-JP-NanamiNeural" : "en-US-Ava:DragonHDLatestNeural")
-        let mode = useAzureLiveTranslation ? "translate" : "bypass"
-        let provider = useAzureLiveTranslation ? "azure_voice_live" : "none"
+        let openAIEndpoint = ProcessInfo.processInfo.environment["OPENAI_REALTIME_ENDPOINT"] ?? "wss://api.openai.com/v1/realtime"
+        let openAIModel = ProcessInfo.processInfo.environment["OPENAI_REALTIME_MODEL"] ?? "gpt-realtime"
+        let openAIVoiceName = ProcessInfo.processInfo.environment["OPENAI_REALTIME_VOICE_NAME"] ?? "marin"
+        let mode = selectedTranslationProvider == .none ? "bypass" : "translate"
 
         return String(
-            format: #"{"target":"%@","mode":"%@","translation_provider":"%@","azure_voice_live_endpoint":"%@","azure_voice_live_model":"%@","azure_voice_live_api_key_env":"AZURE_VOICELIVE_API_KEY","azure_voice_live_voice_name":"%@","azure_voice_live_source_locale":"%@","azure_voice_live_target_locale":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
+            format: #"{"target":"%@","mode":"%@","translation_provider":"%@","azure_voice_live_endpoint":"%@","azure_voice_live_model":"%@","azure_voice_live_api_key_env":"AZURE_VOICELIVE_API_KEY","azure_voice_live_voice_name":"%@","azure_voice_live_source_locale":"%@","azure_voice_live_target_locale":"%@","openai_realtime_endpoint":"%@","openai_realtime_model":"%@","openai_realtime_api_key_env":"OPENAI_API_KEY","openai_realtime_voice_name":"%@","openai_realtime_source_locale":"%@","openai_realtime_target_locale":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
             targetLanguage,
             mode,
-            provider,
-            endpoint,
-            model,
-            voiceName,
+            selectedTranslationProvider.rawValue,
+            azureEndpoint,
+            azureModel,
+            azureVoiceName,
+            sourceLocale,
+            targetLocale,
+            openAIEndpoint,
+            openAIModel,
+            openAIVoiceName,
             sourceLocale,
             targetLocale,
             inputGainDB,
             limiterThresholdDB
         )
+    }
+
+    private func startTranslationService(using engine: EngineBox) {
+        switch selectedTranslationProvider {
+        case .none:
+            return
+        case .azureVoiceLive:
+            startAzureVoiceLive(using: engine)
+        case .openAIRealtime:
+            startOpenAIRealtime(using: engine)
+        }
     }
 
     private func startAzureVoiceLive(using engine: EngineBox) {
@@ -240,6 +277,24 @@ final class AppViewModel: ObservableObject {
             }
         }
         appendLog("Azure Voice Live started")
+    }
+
+    private func startOpenAIRealtime(using engine: EngineBox) {
+        let endpoint = ProcessInfo.processInfo.environment["OPENAI_REALTIME_ENDPOINT"] ?? "wss://api.openai.com/v1/realtime"
+        let model = ProcessInfo.processInfo.environment["OPENAI_REALTIME_MODEL"] ?? "gpt-realtime"
+        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
+        guard !apiKey.isEmpty else {
+            appendLog("OpenAI Realtime disabled: OPENAI_API_KEY is missing")
+            return
+        }
+
+        openAIRealtimeService.start(engine: engine, endpoint: endpoint, model: model, apiKey: apiKey) { [weak self] message in
+            Task { @MainActor in
+                self?.appendLog(message)
+                self?.translationStateJSON = engine.translationStateJSON()
+            }
+        }
+        appendLog("OpenAI Realtime started")
     }
 
     private func startSharedBufferMonitor() {

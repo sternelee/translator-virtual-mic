@@ -36,6 +36,7 @@ impl EngineMode {
 pub enum TranslationProvider {
     None,
     AzureVoiceLive,
+    OpenAIRealtime,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +54,18 @@ pub struct AzureVoiceLiveConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct OpenAIRealtimeConfig {
+    pub endpoint: String,
+    pub model: String,
+    pub api_key: String,
+    pub api_key_env: String,
+    pub voice_name: String,
+    pub source_locale: String,
+    pub target_locale: String,
+    pub enable_server_vad: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
     pub target_language: String,
@@ -63,6 +76,7 @@ pub struct EngineConfig {
     pub limiter_threshold_db: f32,
     pub translation_provider: TranslationProvider,
     pub azure_voice_live: Option<AzureVoiceLiveConfig>,
+    pub openai_realtime: Option<OpenAIRealtimeConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -79,6 +93,7 @@ impl Default for EngineConfig {
             limiter_threshold_db: -1.0,
             translation_provider: TranslationProvider::None,
             azure_voice_live: None,
+            openai_realtime: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -87,8 +102,10 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub fn from_json_lossy(raw: &str) -> Self {
-        let mut config = Self::default();
-        config.raw_config_json = raw.to_string();
+        let mut config = Self {
+            raw_config_json: raw.to_string(),
+            ..Self::default()
+        };
 
         if raw.contains("\"fallback_mode\":\"mute\"") || raw.contains("fallback_mode = \"mute\"") {
             config.mode = EngineMode::MuteOnFailure;
@@ -108,11 +125,15 @@ impl EngineConfig {
         if let Some(provider) = extract_string_value(raw, "translation_provider") {
             config.translation_provider = match provider.as_str() {
                 "azure_voice_live" => TranslationProvider::AzureVoiceLive,
+                "openai_realtime" => TranslationProvider::OpenAIRealtime,
                 _ => TranslationProvider::None,
             };
         }
         if let Some(azure_voice_live) = AzureVoiceLiveConfig::from_json_lossy(raw, &config) {
             config.azure_voice_live = Some(azure_voice_live);
+        }
+        if let Some(openai_realtime) = OpenAIRealtimeConfig::from_json_lossy(raw, &config) {
+            config.openai_realtime = Some(openai_realtime);
         }
 
         config
@@ -130,14 +151,18 @@ impl AzureVoiceLiveConfig {
         let api_key_env = extract_string_value(raw, "azure_voice_live_api_key_env")
             .or_else(|| extract_string_value(raw, "api_key_env"))
             .unwrap_or_else(|| "AZURE_VOICELIVE_API_KEY".to_string());
-        let voice_name = extract_string_value(raw, "azure_voice_live_voice_name")
-            .unwrap_or_else(|| locale_default_voice(&azure_target_locale_from_config(raw, engine_config)).to_string());
+        let voice_name =
+            extract_string_value(raw, "azure_voice_live_voice_name").unwrap_or_else(|| {
+                locale_default_voice(&azure_target_locale_from_config(raw, engine_config))
+                    .to_string()
+            });
         let voice_type = extract_string_value(raw, "azure_voice_live_voice_type")
             .unwrap_or_else(|| "azure-standard".to_string());
         let source_locale = extract_string_value(raw, "azure_voice_live_source_locale")
             .unwrap_or_else(|| azure_source_locale_from_config(raw, engine_config));
         let target_locale = azure_target_locale_from_config(raw, engine_config);
-        let enable_server_vad = extract_bool_value(raw, "azure_voice_live_enable_server_vad").unwrap_or(true);
+        let enable_server_vad =
+            extract_bool_value(raw, "azure_voice_live_enable_server_vad").unwrap_or(true);
 
         Some(Self {
             endpoint,
@@ -147,6 +172,46 @@ impl AzureVoiceLiveConfig {
             api_key_env,
             voice_name,
             voice_type,
+            source_locale,
+            target_locale,
+            enable_server_vad,
+        })
+    }
+}
+
+impl OpenAIRealtimeConfig {
+    pub fn from_json_lossy(raw: &str, engine_config: &EngineConfig) -> Option<Self> {
+        let has_openai_settings =
+            raw.contains("\"openai_realtime_") || raw.contains("openai_realtime_");
+        if engine_config.translation_provider != TranslationProvider::OpenAIRealtime
+            && !has_openai_settings
+        {
+            return None;
+        }
+
+        let endpoint = extract_string_value(raw, "openai_realtime_endpoint")
+            .unwrap_or_else(|| "wss://api.openai.com/v1/realtime".to_string());
+        let model = extract_string_value(raw, "openai_realtime_model")
+            .unwrap_or_else(|| "gpt-realtime".to_string());
+        let api_key = extract_string_value(raw, "openai_realtime_api_key").unwrap_or_default();
+        let api_key_env = extract_string_value(raw, "openai_realtime_api_key_env")
+            .or_else(|| extract_string_value(raw, "api_key_env"))
+            .unwrap_or_else(|| "OPENAI_API_KEY".to_string());
+        let voice_name = extract_string_value(raw, "openai_realtime_voice_name")
+            .unwrap_or_else(|| "marin".to_string());
+        let source_locale = extract_string_value(raw, "openai_realtime_source_locale")
+            .unwrap_or_else(|| source_locale_from_config(raw, engine_config));
+        let target_locale = extract_string_value(raw, "openai_realtime_target_locale")
+            .unwrap_or_else(|| target_locale_from_config(raw, engine_config));
+        let enable_server_vad =
+            extract_bool_value(raw, "openai_realtime_enable_server_vad").unwrap_or(true);
+
+        Some(Self {
+            endpoint,
+            model,
+            api_key,
+            api_key_env,
+            voice_name,
             source_locale,
             target_locale,
             enable_server_vad,
