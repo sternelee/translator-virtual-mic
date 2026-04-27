@@ -143,6 +143,7 @@ impl EngineSession {
                 if let Some(bridge) = &mut self.openai_realtime {
                     bridge.queue_input_audio_f32(&frame.data, frame.sample_rate);
                 }
+                // ElevenLabs: audio is accumulated on the Swift side; nothing to do here.
             }
             EngineMode::CaptionOnly | EngineMode::MuteOnFailure => {}
         }
@@ -229,7 +230,11 @@ impl EngineSession {
         self.push_translated_output(samples, timestamp_ns)
     }
 
-    fn push_translated_output(&mut self, samples: Vec<f32>, timestamp_ns: u64) -> Result<usize> {
+    pub fn push_translated_output(
+        &mut self,
+        samples: Vec<f32>,
+        timestamp_ns: u64,
+    ) -> Result<usize> {
         let output_data = if self.config.output_sample_rate == 24_000 {
             samples
         } else {
@@ -285,7 +290,7 @@ impl EngineSession {
             TranslationProvider::OpenAIRealtime => {
                 self.openai_realtime = Some(OpenAIRealtimeBridge::from_config(&self.config)?);
             }
-            TranslationProvider::None => {}
+            TranslationProvider::ElevenLabs | TranslationProvider::None => {}
         }
         Ok(())
     }
@@ -387,6 +392,29 @@ fn resample_interleaved_linear(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elevenlabs_translate_mode_no_bridge_and_push_translated_works() {
+        let mut session = EngineSession::new(EngineConfig::from_json_lossy(
+            r#"{"translation_provider":"eleven_labs"}"#,
+        ));
+        session.set_mode(EngineMode::Translate);
+        session
+            .enable_shared_output(960, 1, 48_000)
+            .expect("shared output");
+        session.start().expect("start");
+
+        // push_input_pcm must succeed (ElevenLabs arm is a no-op)
+        session
+            .push_input_pcm(&[0.0f32, 0.1, -0.1], 3, 1, 48_000, 1)
+            .expect("push input should not error in ElevenLabs translate mode");
+
+        // push_translated_output is now pub and callable directly
+        let frames = session
+            .push_translated_output(vec![0.0f32; 240], 0)
+            .expect("push translated output");
+        assert!(frames > 0, "expected frames written to output ring");
+    }
 
     #[test]
     fn bypass_resamples_input_for_shared_output() {
