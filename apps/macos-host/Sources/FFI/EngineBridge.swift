@@ -55,6 +55,13 @@ final class EngineBox {
         }
     }
 
+    func pushTranslatedPCM(samples: [Float], frameCount: Int32, channels: Int32, sampleRate: Int32, timestampNs: UInt64) -> Int32 {
+        guard let runtime, let handle else { return -1 }
+        return samples.withUnsafeBufferPointer { buffer in
+            runtime.pushTranslatedPcm(handle, buffer.baseAddress, frameCount, channels, sampleRate, timestampNs)
+        }
+    }
+
     func metricsJSON() -> String {
         guard let runtime, let handle, let raw = runtime.metricsJson(handle) else {
             return "{}"

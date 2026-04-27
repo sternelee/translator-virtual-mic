@@ -31,6 +31,7 @@ final class EngineRuntime {
     typealias MetricsJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias SharedOutputPathFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias TranslationStateJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
+    typealias PushTranslatedPcmFn = @convention(c) (EngineHandleRef?, UnsafePointer<Float>?, Int32, Int32, Int32, UInt64) -> Int32
 
     let create: CreateFn
     let destroy: DestroyFn
@@ -46,6 +47,7 @@ final class EngineRuntime {
     let metricsJson: MetricsJsonFn
     let sharedOutputPath: SharedOutputPathFn
     let translationStateJson: TranslationStateJsonFn
+    let pushTranslatedPcm: PushTranslatedPcmFn
 
     private let dylibHandle: UnsafeMutableRawPointer
 
@@ -93,7 +95,8 @@ final class EngineRuntime {
             lastError: loadSymbol("engine_get_last_error", as: LastErrorFn.self),
             metricsJson: loadSymbol("engine_get_metrics_json", as: MetricsJsonFn.self),
             sharedOutputPath: loadSymbol("engine_get_shared_output_path", as: SharedOutputPathFn.self),
-            translationStateJson: loadSymbol("engine_get_translation_state_json", as: TranslationStateJsonFn.self)
+            translationStateJson: loadSymbol("engine_get_translation_state_json", as: TranslationStateJsonFn.self),
+            pushTranslatedPcm: loadSymbol("engine_push_translated_pcm", as: PushTranslatedPcmFn.self)
         )
     }
 
@@ -144,7 +147,8 @@ final class EngineRuntime {
         lastError: LastErrorFn,
         metricsJson: MetricsJsonFn,
         sharedOutputPath: SharedOutputPathFn,
-        translationStateJson: TranslationStateJsonFn
+        translationStateJson: TranslationStateJsonFn,
+        pushTranslatedPcm: PushTranslatedPcmFn
     ) {
         self.dylibHandle = dylibHandle
         self.create = create
@@ -161,6 +165,7 @@ final class EngineRuntime {
         self.metricsJson = metricsJson
         self.sharedOutputPath = sharedOutputPath
         self.translationStateJson = translationStateJson
+        self.pushTranslatedPcm = pushTranslatedPcm
     }
 
     deinit {
