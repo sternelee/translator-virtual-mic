@@ -37,6 +37,7 @@ pub enum TranslationProvider {
     None,
     AzureVoiceLive,
     OpenAIRealtime,
+    ElevenLabs,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +127,7 @@ impl EngineConfig {
             config.translation_provider = match provider.as_str() {
                 "azure_voice_live" => TranslationProvider::AzureVoiceLive,
                 "openai_realtime" => TranslationProvider::OpenAIRealtime,
+                "eleven_labs" => TranslationProvider::ElevenLabs,
                 _ => TranslationProvider::None,
             };
         }
@@ -370,3 +372,14 @@ impl fmt::Display for EngineError {
 impl std::error::Error for EngineError {}
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eleven_labs_provider_parsed_from_json() {
+        let config = EngineConfig::from_json_lossy(r#"{"translation_provider":"eleven_labs"}"#);
+        assert_eq!(config.translation_provider, TranslationProvider::ElevenLabs);
+    }
+}
