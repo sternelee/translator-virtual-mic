@@ -26,6 +26,7 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
     case none = "none"
     case openAIRealtime = "openai_realtime"
     case azureVoiceLive = "azure_voice_live"
+    case elevenLabs = "eleven_labs"
 
     var id: String { rawValue }
 
@@ -37,6 +38,8 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
             "OpenAI Realtime"
         case .azureVoiceLive:
             "Azure Voice Live"
+        case .elevenLabs:
+            "ElevenLabs"
         }
     }
 }
@@ -62,6 +65,7 @@ final class AppViewModel: ObservableObject {
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
     private let openAIRealtimeService = OpenAIRealtimeService()
+    private let elevenLabsPipelineService = ElevenLabsPipelineService()
     private var engine: EngineBox?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
@@ -158,6 +162,9 @@ final class AppViewModel: ObservableObject {
                     timestampNs: chunk.timestampNs
                 )
 
+                // Route to ElevenLabs pipeline when active (no-op if stopped).
+                self.elevenLabsPipelineService.onAudioChunk(chunk)
+
                 Task { @MainActor in
                     self.inputLevel = chunk.rmsLevel
                     self.metricsJSON = engine.metricsJSON()
@@ -194,6 +201,7 @@ final class AppViewModel: ObservableObject {
         captureService.stop()
         azureVoiceLiveService.stop()
         openAIRealtimeService.stop()
+        elevenLabsPipelineService.stop()
         stopSharedBufferMonitor()
         guard let engine else { return }
         _ = engine.stop()
@@ -255,6 +263,8 @@ final class AppViewModel: ObservableObject {
             startAzureVoiceLive(using: engine)
         case .openAIRealtime:
             startOpenAIRealtime(using: engine)
+        case .elevenLabs:
+            startElevenLabs(using: engine)
         }
     }
 
@@ -295,6 +305,31 @@ final class AppViewModel: ObservableObject {
             }
         }
         appendLog("OpenAI Realtime started")
+    }
+
+    private func startElevenLabs(using engine: EngineBox) {
+        guard !ProcessInfo.processInfo.environment["OPENAI_API_KEY", default: ""].isEmpty else {
+            appendLog("ElevenLabs disabled: OPENAI_API_KEY is missing")
+            return
+        }
+        guard !ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY", default: ""].isEmpty else {
+            appendLog("ElevenLabs disabled: ELEVENLABS_API_KEY is missing")
+            return
+        }
+        guard !ProcessInfo.processInfo.environment["ELEVENLABS_VOICE_ID", default: ""].isEmpty else {
+            appendLog("ElevenLabs disabled: ELEVENLABS_VOICE_ID is missing")
+            return
+        }
+
+        let targetLocale: String = switch targetLanguage {
+        case "zh": "zh-CN"
+        case "ja": "ja-JP"
+        default: "en-US"
+        }
+
+        elevenLabsPipelineService.configure(engine: engine, targetLocale: targetLocale)
+        elevenLabsPipelineService.reset()
+        appendLog("ElevenLabs pipeline started (target=\(targetLocale))")
     }
 
     private func startSharedBufferMonitor() {
