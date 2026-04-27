@@ -91,9 +91,7 @@ final class ElevenLabsPipelineService {
 
         Task {
             await self.runPipeline(utterance: utterance, sampleRate: sampleRate)
-            self.lock.lock()
-            self.isPipelineRunning = false
-            self.lock.unlock()
+            self.lock.withLock { self.isPipelineRunning = false }
         }
     }
 
