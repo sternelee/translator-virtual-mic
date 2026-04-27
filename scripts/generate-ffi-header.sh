@@ -40,6 +40,15 @@ int32_t engine_push_input_pcm(
     uint64_t timestamp_ns
 );
 
+int32_t engine_push_translated_pcm(
+    EngineHandle *handle,
+    const float *samples,
+    int32_t frame_count,
+    int32_t channels,
+    int32_t sample_rate,
+    uint64_t timestamp_ns
+);
+
 int32_t engine_pull_output_pcm(
     EngineHandle *handle,
     float *out_samples,

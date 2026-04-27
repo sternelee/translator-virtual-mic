@@ -36,6 +36,15 @@ int32_t engine_push_input_pcm(
     uint64_t timestamp_ns
 );
 
+int32_t engine_push_translated_pcm(
+    EngineHandle *handle,
+    const float *samples,
+    int32_t frame_count,
+    int32_t channels,
+    int32_t sample_rate,
+    uint64_t timestamp_ns
+);
+
 int32_t engine_pull_output_pcm(
     EngineHandle *handle,
     float *out_samples,
@@ -53,21 +62,9 @@ int32_t engine_read_shared_output_pcm(
     uint64_t *out_timestamp_ns
 );
 
-int32_t engine_take_next_translation_event(
-    EngineHandle *handle,
-    char *out_json,
-    int32_t max_len
-);
-
-int32_t engine_ingest_translation_event(
-    EngineHandle *handle,
-    const char *event_json
-);
-
 const char *engine_get_last_error(EngineHandle *handle);
 const char *engine_get_metrics_json(EngineHandle *handle);
 const char *engine_get_shared_output_path(EngineHandle *handle);
-const char *engine_get_translation_state_json(EngineHandle *handle);
 
 #ifdef __cplusplus
 }
