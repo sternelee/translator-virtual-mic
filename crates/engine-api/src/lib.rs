@@ -448,3 +448,75 @@ pub extern "C" fn engine_get_translation_state_json(handle: *mut EngineHandle) -
         .expect("translation_state_json poisoned")
         .as_ptr()
 }
+
+#[no_mangle]
+pub extern "C" fn engine_push_translated_pcm(
+    handle: *mut EngineHandle,
+    samples: *const f32,
+    frame_count: i32,
+    channels: i32,
+    sample_rate: i32,
+    timestamp_ns: u64,
+) -> i32 {
+    with_handle(handle, |handle| {
+        if samples.is_null() {
+            return Err("samples pointer is null".to_string());
+        }
+        if frame_count <= 0 || channels <= 0 || sample_rate <= 0 {
+            return Err("invalid PCM shape".to_string());
+        }
+
+        let sample_len = (frame_count as usize).saturating_mul(channels as usize);
+        let slice = unsafe { slice::from_raw_parts(samples, sample_len) };
+        handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .push_translated_output(slice.to_vec(), timestamp_ns)
+            .map_err(|err| err.to_string())?;
+        handle.update_metrics_cache();
+        Ok(())
+    })
+    .map(|_| 0)
+    .unwrap_or(-1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn push_translated_pcm_rejects_null_samples() {
+        let config = CString::new("{}").unwrap();
+        let handle = engine_create(config.as_ptr());
+        assert!(!handle.is_null());
+        assert_eq!(engine_start(handle), 0);
+        assert_eq!(
+            engine_push_translated_pcm(handle, std::ptr::null(), 10, 1, 24_000, 0),
+            -1
+        );
+        engine_destroy(handle);
+    }
+
+    #[test]
+    fn push_translated_pcm_rejects_null_handle() {
+        let samples = vec![0.0f32; 10];
+        assert_eq!(
+            engine_push_translated_pcm(std::ptr::null_mut(), samples.as_ptr(), 10, 1, 24_000, 0,),
+            -1
+        );
+    }
+
+    #[test]
+    fn push_translated_pcm_writes_to_output_ring() {
+        let config = CString::new("{}").unwrap();
+        let handle = engine_create(config.as_ptr());
+        assert_eq!(engine_start(handle), 0);
+
+        let samples = vec![0.1f32; 240]; // 10ms at 24kHz
+        let result = engine_push_translated_pcm(handle, samples.as_ptr(), 240, 1, 24_000, 0);
+        assert_eq!(result, 0, "expected success");
+        engine_destroy(handle);
+    }
+}
