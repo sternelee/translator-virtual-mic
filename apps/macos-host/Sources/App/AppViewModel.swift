@@ -125,7 +125,7 @@ final class AppViewModel: ObservableObject {
         let engine = EngineBox(configJSON: configJSON)
         guard engine.start() == 0 else {
             statusText = "Failed"
-            appendLog("engine_start failed: \(engine.lastError())")
+            appendLog("engine_start failed (or dylib failed to load): \(engine.lastError())")
             return
         }
 
@@ -308,16 +308,18 @@ final class AppViewModel: ObservableObject {
     }
 
     private func startElevenLabs(using engine: EngineBox) {
-        guard !ProcessInfo.processInfo.environment["OPENAI_API_KEY", default: ""].isEmpty else {
-            appendLog("ElevenLabs disabled: OPENAI_API_KEY is missing")
+        let env = ProcessInfo.processInfo.environment
+        guard !env["ELEVENLABS_API_KEY", default: ""].isEmpty else {
+            appendLog("ElevenLabs disabled: ELEVENLABS_API_KEY is missing (used for Scribe STT and TTS)")
             return
         }
-        guard !ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY", default: ""].isEmpty else {
-            appendLog("ElevenLabs disabled: ELEVENLABS_API_KEY is missing")
-            return
-        }
-        guard !ProcessInfo.processInfo.environment["ELEVENLABS_VOICE_ID", default: ""].isEmpty else {
+        guard !env["ELEVENLABS_VOICE_ID", default: ""].isEmpty else {
             appendLog("ElevenLabs disabled: ELEVENLABS_VOICE_ID is missing")
+            return
+        }
+        let mtKeyEnv = env["MT_API_KEY_ENV"] ?? "OPENAI_API_KEY"
+        guard !env[mtKeyEnv, default: ""].isEmpty else {
+            appendLog("ElevenLabs disabled: MT API key env var '\(mtKeyEnv)' is missing")
             return
         }
 

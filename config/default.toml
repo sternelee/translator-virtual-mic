@@ -38,6 +38,20 @@ source_locale = "auto"
 target_locale = "en-US"
 enable_server_vad = true
 
+# ElevenLabs pipeline (STT via Scribe, MT via configurable OpenAI-compatible endpoint, TTS via ElevenLabs).
+# Swift host reads these from env vars; this section is informational.
+#   ELEVENLABS_API_KEY        - required, used for Scribe STT and TTS
+#   ELEVENLABS_VOICE_ID       - required, target voice for TTS
+#   ELEVENLABS_MODEL_ID       - optional, default eleven_multilingual_v2
+#   MT_BASE_URL               - optional, default https://api.openai.com/v1
+#                               (e.g. https://openrouter.ai/api/v1, https://api.groq.com/openai/v1)
+#   MT_MODEL                  - optional, default gpt-4o-mini
+#   MT_API_KEY_ENV            - optional, default OPENAI_API_KEY (name of env var holding the key)
+[elevenlabs]
+mt_base_url = "https://api.openai.com/v1"
+mt_model = "gpt-4o-mini"
+mt_api_key_env = "OPENAI_API_KEY"
+
 [virtual_device]
 name = "Translator Virtual Mic"
 preferred_sample_rate = 48000

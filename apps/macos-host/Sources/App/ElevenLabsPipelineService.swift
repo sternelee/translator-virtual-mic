@@ -7,7 +7,12 @@ private enum PipelineError: Error {
     case missingVoiceId
 }
 
-/// Three-step pipeline: Whisper ASR → GPT-4o MT → ElevenLabs TTS.
+/// Three-step pipeline: ElevenLabs Scribe (STT) → configurable MT → ElevenLabs TTS.
+///
+/// MT step uses any OpenAI-compatible chat-completions endpoint, configured via env:
+///   - `MT_BASE_URL`     (default `https://api.openai.com/v1`)
+///   - `MT_MODEL`        (default `gpt-4o-mini`)
+///   - `MT_API_KEY_ENV`  (default `OPENAI_API_KEY`) — name of env var holding the key
 ///
 /// Thread safety: `onAudioChunk` is called from the AVCapture background thread.
 /// All mutable state is protected by `lock`.
@@ -122,32 +127,33 @@ final class ElevenLabsPipelineService {
         }
     }
 
-    // MARK: - Step 1: Whisper ASR
+    // MARK: - Step 1: ElevenLabs Scribe STT
 
     private func transcribe(samples: [Float], sampleRate: Int) async throws -> String {
-        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-        guard !apiKey.isEmpty else { throw PipelineError.missingApiKey("OPENAI_API_KEY") }
+        let apiKey = ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"] ?? ""
+        guard !apiKey.isEmpty else { throw PipelineError.missingApiKey("ELEVENLABS_API_KEY") }
 
+        // Scribe accepts WAV; resample to 16 kHz mono int16 to keep payloads small.
         let wavData = buildWAV(samples: samples, inputSampleRate: UInt32(sampleRate))
 
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
+        var request = URLRequest(url: URL(string: "https://api.elevenlabs.io/v1/speech-to-text")!)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
 
         let boundary = "Boundary-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         var body = Data()
+        // model_id part
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"model_id\"\r\n\r\n".data(using: .utf8)!)
+        body.append("scribe_v1\r\n".data(using: .utf8)!)
         // file part
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(wavData)
         body.append("\r\n".data(using: .utf8)!)
-        // model part
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
-        body.append("whisper-1\r\n".data(using: .utf8)!)
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
 
@@ -161,19 +167,27 @@ final class ElevenLabsPipelineService {
         return (json?["text"] as? String) ?? ""
     }
 
-    // MARK: - Step 2: GPT-4o Translation
+    // MARK: - Step 2: Configurable MT (any OpenAI-compatible /chat/completions endpoint)
 
     private func translate(text: String, targetLocale: String) async throws -> String {
-        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-        guard !apiKey.isEmpty else { throw PipelineError.missingApiKey("OPENAI_API_KEY") }
+        let env = ProcessInfo.processInfo.environment
+        let baseURL = (env["MT_BASE_URL"] ?? "https://api.openai.com/v1")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = env["MT_MODEL"] ?? "gpt-4o-mini"
+        let keyEnvName = env["MT_API_KEY_ENV"] ?? "OPENAI_API_KEY"
+        let apiKey = env[keyEnvName] ?? ""
+        guard !apiKey.isEmpty else { throw PipelineError.missingApiKey(keyEnvName) }
 
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        guard let url = URL(string: "\(baseURL)/chat/completions") else {
+            throw PipelineError.httpError(0, "invalid MT_BASE_URL: \(baseURL)")
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
         let body: [String: Any] = [
-            "model": "gpt-4o",
+            "model": model,
             "messages": [
                 [
                     "role": "system",

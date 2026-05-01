@@ -8,3 +8,6 @@ DerivedData
 *.dll
 native/macos/build/
 .omx/
+
+# Built host bundle binary (rebuilt locally; produced by `cd apps/macos-host && swift build`)
+apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost
