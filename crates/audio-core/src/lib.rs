@@ -81,7 +81,13 @@ impl SampleRingBuffer {
     }
 }
 
-pub fn build_frame(samples: &[f32], frame_count: usize, channels: u16, sample_rate: u32, timestamp_ns: u64) -> AudioFrame {
+pub fn build_frame(
+    samples: &[f32],
+    frame_count: usize,
+    channels: u16,
+    sample_rate: u32,
+    timestamp_ns: u64,
+) -> AudioFrame {
     let sample_len = frame_count.saturating_mul(usize::from(channels.max(1)));
     let mut data = Vec::with_capacity(sample_len);
     data.extend_from_slice(&samples[..sample_len.min(samples.len())]);

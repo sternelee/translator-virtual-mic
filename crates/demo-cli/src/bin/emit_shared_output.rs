@@ -20,9 +20,7 @@ fn main() {
         .push_input_pcm(&samples, frames, 1, 48_000, 123_456_789)
         .expect("push PCM");
 
-    let shared_path = session
-        .shared_output_path()
-        .expect("shared output path");
+    let shared_path = session.shared_output_path().expect("shared output path");
 
     println!("shared_path={shared_path}");
     println!("frames_written={frames}");

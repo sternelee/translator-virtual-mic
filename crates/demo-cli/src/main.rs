@@ -21,14 +21,14 @@ fn main() {
         .expect("push PCM");
 
     let mut out = vec![0.0f32; frames];
-    let ts = session.pull_output_pcm(&mut out, 1, 48_000).expect("pull PCM");
+    let ts = session
+        .pull_output_pcm(&mut out, 1, 48_000)
+        .expect("pull PCM");
     let mut shared = vec![0.0f32; frames];
     let (shared_frames, shared_ts) = session
         .read_shared_output_pcm(&mut shared, 1)
         .expect("read shared output");
-    let shared_path = session
-        .shared_output_path()
-        .expect("shared output path");
+    let shared_path = session.shared_output_path().expect("shared output path");
 
     println!("timestamp_ns={ts}");
     println!("first_samples={:?}", &out[..8]);

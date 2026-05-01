@@ -52,7 +52,8 @@ impl SharedOutputBuffer {
 
         let file_path = PathBuf::from(SHARED_BUFFER_FILE_PATH);
         if let Some(parent) = file_path.parent() {
-            create_dir_all(parent).map_err(|err| EngineError::new(format!("create shared buffer dir: {err}")))?;
+            create_dir_all(parent)
+                .map_err(|err| EngineError::new(format!("create shared buffer dir: {err}")))?;
         }
 
         let channel_count = usize::from(channels);
@@ -148,7 +149,8 @@ impl SharedOutputBuffer {
         let capacity_frames = state.header.capacity_frames as usize;
         let available_frames = cmp::min(
             capacity_frames,
-            state.header
+            state
+                .header
                 .write_index_frames
                 .saturating_sub(state.header.read_index_frames) as usize,
         );
