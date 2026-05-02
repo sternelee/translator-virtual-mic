@@ -156,7 +156,9 @@ final class AppViewModel: ObservableObject {
         }
         _ = engine.setTargetLanguage(targetLanguage)
         _ = engine.setMode(engineMode)
-        let sharedResult = engine.enableSharedOutput(capacityFrames: 14_400, channels: 1, sampleRate: 48_000)
+        // 480_000 frames = 10 seconds at 48 kHz — large enough to hold several TTS utterances
+        // without the ring buffer overwriting unread audio before the HAL drains it.
+        let sharedResult = engine.enableSharedOutput(capacityFrames: 480_000, channels: 1, sampleRate: 48_000)
         appendLog("enableSharedOutput result: \(sharedResult)")
         if sharedResult != 0 {
             _ = engine.stop()
