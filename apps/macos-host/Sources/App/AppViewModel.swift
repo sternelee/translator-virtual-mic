@@ -72,6 +72,10 @@ final class AppViewModel: ObservableObject {
     @Published var selectedLocalMtModelId: String = "opus-mt-zh-en"
     @Published var localMtEnabled: Bool = false
     @Published var localMtModelDownloadState: DownloadState = .idle
+    @Published var ttsEnabled: Bool = false
+    @Published var selectedTtsModelId: String = "kokoro-en-v0_19"
+    @Published var ttsSpeed: Double = 1.0
+    @Published var ttsModelDownloadState: DownloadState = .idle
 
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
@@ -82,6 +86,7 @@ final class AppViewModel: ObservableObject {
     private var engine: EngineBox?
     private var downloadCancellable: AnyCancellable?
     private var mtDownloadCancellable: AnyCancellable?
+    private var ttsDownloadCancellable: AnyCancellable?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
 
@@ -314,8 +319,17 @@ final class AppViewModel: ObservableObject {
             let localMtModelDir = env["LOCAL_MT_MODEL_DIR"] ?? modelDir
             let localMtSourceLang = env["LOCAL_MT_SOURCE_LANG"] ?? "zh"
 
-            // Append local_stt, mt, and local_mt keys by slicing before the final "}"
-            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)"}"#
+            // TTS config
+            let ttsEnabledStr = (ttsEnabled && isTtsModelDownloaded(selectedTtsModelId)) ? "true" : "false"
+            let ttsModelDir = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first?
+                .appendingPathComponent("translator-virtual-mic/models/tts")
+                .path ?? ""
+            let ttsSpeedStr = String(format: "%.2f", ttsSpeed)
+
+            // Append local_stt, mt, local_mt, and tts keys by slicing before the final "}"
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr)}"#
             if let idx = base.lastIndex(of: "}") {
                 base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
             }
@@ -561,6 +575,42 @@ final class AppViewModel: ObservableObject {
         guard let model = MtModelRegistry.model(for: modelId) else { return }
         modelDownloadService.deleteMtModel(model)
         appendLog("Deleted MT model \(modelId)")
+    }
+
+    // MARK: - Local TTS Model Management
+
+    func isTtsModelDownloaded(_ modelId: String) -> Bool {
+        guard let model = TtsModelRegistry.model(for: modelId) else { return false }
+        return modelDownloadService.isTtsModelDownloaded(model)
+    }
+
+    func downloadTtsModel(_ modelId: String) {
+        guard let model = TtsModelRegistry.model(for: modelId) else { return }
+        ttsModelDownloadState = .idle
+        ttsDownloadCancellable = modelDownloadService.$ttsState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.ttsModelDownloadState = state
+                if case .completed = state {
+                    self?.appendLog("TTS model \(modelId) downloaded")
+                } else if case .failed(let msg) = state {
+                    self?.appendLog("TTS model download failed: \(msg)")
+                }
+            }
+        modelDownloadService.startTtsDownload(model)
+    }
+
+    func cancelTtsModelDownload() {
+        modelDownloadService.cancelTtsDownload()
+        ttsDownloadCancellable?.cancel()
+        ttsDownloadCancellable = nil
+        ttsModelDownloadState = .idle
+    }
+
+    func deleteTtsModel(_ modelId: String) {
+        guard let model = TtsModelRegistry.model(for: modelId) else { return }
+        modelDownloadService.deleteTtsModel(model)
+        appendLog("Deleted TTS model \(modelId)")
     }
 
     private func appendLog(_ message: String) {
