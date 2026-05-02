@@ -1,5 +1,15 @@
 import SwiftUI
 
+private func langDisplayName(_ code: String) -> String {
+    switch code {
+    case "zh": return "Chinese"
+    case "en": return "English"
+    case "ja": return "Japanese"
+    case "*": return "Any"
+    default: return code.uppercased()
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
@@ -105,6 +115,63 @@ struct ContentView: View {
                             Text("Silero VAD model ready")
                                 .font(.caption)
                                 .foregroundStyle(.green)
+                        }
+                    }
+                }
+
+                if viewModel.selectedTranslationProvider == .localCaption {
+                    Section("Local MT Model") {
+                        Picker("Model", selection: $viewModel.selectedLocalMtModelId) {
+                            ForEach(MtModelRegistry.allModels) { model in
+                                let downloaded = viewModel.isMtModelDownloaded(model.id)
+                                Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
+                            }
+                        }
+                        if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId) {
+                            Text(model.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("Direction: \(langDisplayName(model.srcLang)) → \(langDisplayName(model.tgtLang))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("Size: \(model.sizeDisplay)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                if viewModel.isMtModelDownloaded(model.id) {
+                                    Button("Delete") {
+                                        viewModel.deleteMtModel(model.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.red)
+                                } else {
+                                    Button("Download") {
+                                        viewModel.downloadMtModel(model.id)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(viewModel.localMtModelDownloadState != .idle)
+                                }
+                                Spacer()
+                            }
+                            if case .downloading(let progress) = viewModel.localMtModelDownloadState,
+                               progress.modelId == model.id {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
+                                    Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
+                                        .font(.caption2)
+                                }
+                            }
+                        }
+
+                        Toggle("Use local MT (replaces remote)", isOn: $viewModel.localMtEnabled)
+                            .disabled(!viewModel.isMtModelDownloaded(viewModel.selectedLocalMtModelId))
+
+                        if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId),
+                           model.tgtLang != "*",
+                           model.tgtLang != viewModel.targetLanguage {
+                            Text("Warning: Model translates to \(langDisplayName(model.tgtLang)) but target language is \(langDisplayName(viewModel.targetLanguage))")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         }
                     }
                 }

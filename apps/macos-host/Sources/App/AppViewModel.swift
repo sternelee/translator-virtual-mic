@@ -69,6 +69,9 @@ final class AppViewModel: ObservableObject {
     @Published var captionStateJSON: String = "{}"
     @Published var selectedLocalSttModelId: String = "paraformer-zh"
     @Published var localSttModelDownloadState: DownloadState = .idle
+    @Published var selectedLocalMtModelId: String = "opus-mt-zh-en"
+    @Published var localMtEnabled: Bool = false
+    @Published var localMtModelDownloadState: DownloadState = .idle
 
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
@@ -78,6 +81,7 @@ final class AppViewModel: ObservableObject {
     private let modelDownloadService = ModelDownloadService()
     private var engine: EngineBox?
     private var downloadCancellable: AnyCancellable?
+    private var mtDownloadCancellable: AnyCancellable?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
 
@@ -304,8 +308,14 @@ final class AppViewModel: ObservableObject {
             let mtModel = env["MT_MODEL"] ?? "gpt-4o-mini"
             let mtTarget = targetLanguage
 
-            // Append local_stt and mt keys by slicing before the final "}"
-            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)"}"#
+            // Local MT config
+            let localMtEnabledStr = localMtEnabled ? "true" : "false"
+            let localMtModelId = env["LOCAL_MT_MODEL_ID"] ?? selectedLocalMtModelId
+            let localMtModelDir = env["LOCAL_MT_MODEL_DIR"] ?? modelDir
+            let localMtSourceLang = env["LOCAL_MT_SOURCE_LANG"] ?? "zh"
+
+            // Append local_stt, mt, and local_mt keys by slicing before the final "}"
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)"}"#
             if let idx = base.lastIndex(of: "}") {
                 base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
             }
@@ -515,6 +525,42 @@ final class AppViewModel: ObservableObject {
         guard let model = ModelRegistry.model(for: modelId) else { return }
         modelDownloadService.deleteModel(model)
         appendLog("Deleted model \(modelId)")
+    }
+
+    // MARK: - Local MT Model Management
+
+    func isMtModelDownloaded(_ modelId: String) -> Bool {
+        guard let model = MtModelRegistry.model(for: modelId) else { return false }
+        return modelDownloadService.isMtModelDownloaded(model)
+    }
+
+    func downloadMtModel(_ modelId: String) {
+        guard let model = MtModelRegistry.model(for: modelId) else { return }
+        localMtModelDownloadState = .idle
+        mtDownloadCancellable = modelDownloadService.$mtState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.localMtModelDownloadState = state
+                if case .completed = state {
+                    self?.appendLog("MT model \(modelId) downloaded")
+                } else if case .failed(let msg) = state {
+                    self?.appendLog("MT model download failed: \(msg)")
+                }
+            }
+        modelDownloadService.startMtDownload(model)
+    }
+
+    func cancelMtModelDownload() {
+        modelDownloadService.cancelMtDownload()
+        mtDownloadCancellable?.cancel()
+        mtDownloadCancellable = nil
+        localMtModelDownloadState = .idle
+    }
+
+    func deleteMtModel(_ modelId: String) {
+        guard let model = MtModelRegistry.model(for: modelId) else { return }
+        modelDownloadService.deleteMtModel(model)
+        appendLog("Deleted MT model \(modelId)")
     }
 
     private func appendLog(_ message: String) {
