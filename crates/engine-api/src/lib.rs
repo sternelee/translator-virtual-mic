@@ -2,10 +2,48 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
 
 use common::{EngineConfig, EngineMode};
 use session_core::EngineSession;
+
+static INIT_STDIO: Once = Once::new();
+
+/// Force stderr to line-buffered mode so logs flush immediately when the
+/// engine is loaded from a GUI bundle (where stderr defaults to fully
+/// buffered).  Called once on first `engine_create`.
+fn ensure_line_buffered_stderr() {
+    INIT_STDIO.call_once(|| {
+        // SAFETY: stderr is a valid FILE*, and _IOLBF is a valid mode.
+        unsafe {
+            let fp = stderr_file();
+            if !fp.is_null() {
+                libc::setvbuf(fp, std::ptr::null_mut(), libc::_IOLBF, 0);
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn stderr_file() -> *mut libc::FILE {
+    extern "C" {
+        static __stderrp: *mut libc::FILE;
+    }
+    __stderrp
+}
+
+#[cfg(all(target_family = "unix", not(target_os = "macos")))]
+unsafe fn stderr_file() -> *mut libc::FILE {
+    extern "C" {
+        static stderr: *mut libc::FILE;
+    }
+    stderr
+}
+
+#[cfg(not(target_family = "unix"))]
+unsafe fn stderr_file() -> *mut libc::FILE {
+    std::ptr::null_mut()
+}
 
 pub struct EngineHandle {
     session: Mutex<EngineSession>,
@@ -135,6 +173,7 @@ fn with_handle<T>(
 
 #[no_mangle]
 pub extern "C" fn engine_create(config_json: *const c_char) -> *mut EngineHandle {
+    ensure_line_buffered_stderr();
     let config_json = read_optional_cstr(config_json);
     Box::into_raw(Box::new(EngineHandle::new(&config_json)))
 }

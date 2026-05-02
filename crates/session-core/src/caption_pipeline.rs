@@ -451,6 +451,15 @@ fn worker_loop(
             continue;
         }
 
+        // Paraformer FSMN convolution requires at least a few frames of audio,
+        // otherwise it throws "Invalid input shape: {0}".  Skip clips shorter
+        // than 100 ms (1600 samples @ 16 kHz).
+        const MIN_STT_SAMPLES: usize = 1600;
+        if samples.len() < MIN_STT_SAMPLES {
+            worker_busy.store(false, Ordering::Relaxed);
+            continue;
+        }
+
         // eprintln!(
         //     "[caption_pipeline] worker: transcribing {} samples (is_final={})",
         //     samples.len(),
@@ -475,9 +484,14 @@ fn worker_loop(
         // Only run MT/TTS on final segments.
         let (translated, tts_text) = if is_final {
             let translated = if let Some(ref lmt) = local_mt {
-                let result = lmt.translate(&original, &local_mt_target_lang);
-                eprintln!("[caption_pipeline] worker: MT result={:?}", result);
-                result.ok().filter(|t| !t.trim().is_empty())
+                match lmt.translate(&original, &local_mt_target_lang) {
+                    Ok(t) if !t.trim().is_empty() => Some(t),
+                    Ok(_) => None,
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] worker: local MT error: {e}");
+                        None
+                    }
+                }
             } else {
                 mt.as_ref()
                     .and_then(|client| client.translate(&original, &target_lang).ok())

@@ -336,6 +336,7 @@ name = "engine-api"
 version = "0.1.0"
 dependencies = [
  "common",
+ "libc",
  "session-core",
 ]
 

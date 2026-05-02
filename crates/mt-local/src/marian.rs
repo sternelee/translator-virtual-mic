@@ -280,7 +280,6 @@ impl crate::LocalMtBackend for MarianBackend {
         );
 
         let (input_ids, _seq_len) = self.encode_text(text)?;
-        eprintln!("[mt-local] encode: input_ids={:?}", input_ids);
         let encoder_hidden = self.run_encoder(&input_ids)?;
         let tgt_token_id = self.tgt_lang_token_id(target_lang);
         let output_ids = self.greedy_decode(&encoder_hidden, input_ids.len(), tgt_token_id)?;

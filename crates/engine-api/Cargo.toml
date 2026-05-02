@@ -10,3 +10,4 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 common = { path = "../common" }
 session-core = { path = "../session-core" }
+libc = "0.2"
