@@ -76,6 +76,13 @@ target_language = "en"
 name = "Translator Virtual Mic"
 preferred_sample_rate = 48000
 
+[local_tts]
+enabled = false
+model_id = "kokoro-en-v0_19"
+model_dir = "~/Library/Application Support/translator-virtual-mic/models/tts"
+speaker_id = 0
+speed = 1.0
+
 [observability]
 metrics_enabled = true
 log_level = "info"
