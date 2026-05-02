@@ -117,6 +117,12 @@ impl MarianBackend {
             }
         }
 
+        // Append EOS token for encoder (MarianMT convention).
+        let eos_id = self.eos_token_id();
+        if ids.last() != Some(&eos_id) {
+            ids.push(eos_id);
+        }
+
         let len = ids.len();
         Ok((ids, len))
     }
@@ -155,24 +161,21 @@ impl MarianBackend {
         _input_ids_len: usize,
         tgt_lang_token_id: Option<i64>,
     ) -> Result<Vec<i64>> {
-        let bos_id: i64 = tgt_lang_token_id.unwrap_or(0);
+        let bos_id: i64 = tgt_lang_token_id.unwrap_or_else(|| self.bos_token_id());
         let eos_id: i64 = self.eos_token_id();
 
         let mut generated: Vec<i64> = vec![bos_id];
         let enc_seq_len = encoder_hidden.shape()[1];
         let enc_shape = encoder_hidden.shape().to_vec();
 
-        for _ in 0..DEFAULT_MAX_LENGTH {
+        for _step in 0..DEFAULT_MAX_LENGTH {
             let dec_len = generated.len();
             let dec_ids = Array2::from_shape_vec((1, dec_len), generated.clone())
                 .map_err(|e| MtLocalError::Inference(format!("dec shape: {e}")))?;
-            let dec_mask = Array2::<i64>::ones((1, dec_len));
             let enc_mask = Array2::<i64>::ones((1, enc_seq_len));
 
             let dec_ids_t = Tensor::from_array(dec_ids)
                 .map_err(|e| MtLocalError::Inference(format!("dec_ids tensor: {e}")))?;
-            let dec_mask_t = Tensor::from_array(dec_mask)
-                .map_err(|e| MtLocalError::Inference(format!("dec_mask tensor: {e}")))?;
             let enc_mask_t = Tensor::from_array(enc_mask)
                 .map_err(|e| MtLocalError::Inference(format!("enc_mask tensor: {e}")))?;
             let enc_h_arr = ArrayD::from_shape_vec(
@@ -187,7 +190,6 @@ impl MarianBackend {
             let outputs = dec_session
                 .run(inputs![
                     "input_ids" => dec_ids_t,
-                    "decoder_attention_mask" => dec_mask_t,
                     "encoder_attention_mask" => enc_mask_t,
                     "encoder_hidden_states" => enc_h_t
                 ])
@@ -218,6 +220,16 @@ impl MarianBackend {
             generated.remove(0);
         }
         Ok(generated)
+    }
+
+    fn bos_token_id(&self) -> i64 {
+        if let Some(tok) = self.tokenizer.get_vocab(true).get("<pad>") {
+            return *tok as i64;
+        }
+        if let Some(tok) = self.tokenizer.get_vocab(true).get("[BOS]") {
+            return *tok as i64;
+        }
+        0
     }
 
     fn eos_token_id(&self) -> i64 {
@@ -264,6 +276,7 @@ impl crate::LocalMtBackend for MarianBackend {
         );
 
         let (input_ids, _seq_len) = self.encode_text(text)?;
+        eprintln!("[mt-local] encode: input_ids={:?}", input_ids);
         let encoder_hidden = self.run_encoder(&input_ids)?;
         let tgt_token_id = self.tgt_lang_token_id(target_lang);
         let output_ids = self.greedy_decode(&encoder_hidden, input_ids.len(), tgt_token_id)?;
@@ -290,5 +303,22 @@ mod tests {
         assert_eq!(iso_to_nllb("zh"), "zho_Hans");
         assert_eq!(iso_to_nllb("en"), "eng_Latn");
         assert_eq!(iso_to_nllb("ja"), "jpn_Jpan");
+    }
+
+    #[test]
+    #[ignore = "requires model files"]
+    fn opus_mt_zh_en_smoke() {
+        use crate::LocalMtBackend;
+        use std::path::PathBuf;
+        let model_dir = PathBuf::from(std::env::var("HOME").unwrap())
+            .join("Library/Application Support/translator-virtual-mic/models/opus-mt-zh-en");
+        if !model_dir.exists() {
+            eprintln!("Skipping: model dir not found at {:?}", model_dir);
+            return;
+        }
+        let backend = super::MarianBackend::new("opus-mt-zh-en", &model_dir, "zh").unwrap();
+        let result = backend.translate("你好世界", "en").unwrap();
+        eprintln!("Translation result: '{}'", result);
+        assert!(!result.is_empty());
     }
 }
