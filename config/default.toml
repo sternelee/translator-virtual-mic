@@ -83,6 +83,17 @@ model_dir = "~/Library/Application Support/translator-virtual-mic/models/tts"
 speaker_id = 0
 speed = 1.0
 
+# CosyVoice 2 voice-cloning TTS (requires local Python sidecar at cosyvoice_tts_endpoint).
+# Launch the server: cd /path/to/CosyVoice && python runtime/python/fastapi/server.py --port 50000
+# Record a 5-10 s reference voice clip at cosyvoice_tts_prompt_wav_path before enabling.
+[cosyvoice_tts]
+enabled = false
+endpoint = "http://127.0.0.1:50000"
+# Path to reference voice WAV (5-10 s mono, 16 kHz recommended).
+prompt_wav_path = "~/.translator_virtual_mic/ref_voice.wav"
+# Transcript of the reference wav - improves prosody; leave empty if unknown.
+prompt_text = ""
+
 [observability]
 metrics_enabled = true
 log_level = "info"

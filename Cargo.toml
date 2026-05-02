@@ -10,6 +10,7 @@ members = [
   "crates/stt-local",
   "crates/mt-client",
   "crates/mt-local",
+  "crates/tts-cosyvoice",
 ]
 resolver = "2"
 
