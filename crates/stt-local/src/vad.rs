@@ -94,21 +94,21 @@ impl Vad {
             return Vec::new();
         }
         self.pending.extend_from_slice(samples);
-        let mut windows_processed = 0usize;
+        let mut _windows_processed = 0usize;
         while self.pending.len() >= self.window_size {
             let chunk: Vec<f32> = self.pending.drain(..self.window_size).collect();
             self.inner.accept_waveform(&chunk);
-            windows_processed += 1;
+            _windows_processed += 1;
         }
-        if windows_processed > 0 {
-            eprintln!(
-                "[vad] accept_waveform x{} pending_left={} detected={} empty={}",
-                windows_processed,
-                self.pending.len(),
-                self.inner.detected(),
-                self.inner.is_empty()
-            );
-        }
+        // if windows_processed > 0 {
+        //     eprintln!(
+        //         "[vad] accept_waveform x{} pending_left={} detected={} empty={}",
+        //         windows_processed,
+        //         self.pending.len(),
+        //         self.inner.detected(),
+        //         self.inner.is_empty()
+        //     );
+        // }
         self.drain()
     }
 

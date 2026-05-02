@@ -157,12 +157,12 @@ impl EngineSession {
             }
             EngineMode::CaptionOnly => {
                 if let Some(pipeline) = self.caption_pipeline.as_mut() {
-                    eprintln!(
-                        "[session-core] push_input_pcm: samples={} ch={} sr={}",
-                        frame.data.len(),
-                        frame.channels,
-                        frame.sample_rate
-                    );
+                    // eprintln!(
+                    //     "[session-core] push_input_pcm: samples={} ch={} sr={}",
+                    //     frame.data.len(),
+                    //     frame.channels,
+                    //     frame.sample_rate
+                    // );
                     pipeline.push_pcm(
                         &frame.data,
                         frame.channels,
@@ -182,7 +182,7 @@ impl EngineSession {
                         )?;
                     }
                 } else {
-                    eprintln!("[session-core] push_input_pcm: no caption pipeline active");
+                    // eprintln!("[session-core] push_input_pcm: no caption pipeline active");
                 }
             }
             EngineMode::MuteOnFailure => {}

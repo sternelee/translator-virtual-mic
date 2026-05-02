@@ -274,22 +274,23 @@ impl CaptionPipeline {
         };
 
         // RMS energy — helps diagnose if mic signal is reaching VAD
-        if !resampled.is_empty() {
-            let rms =
-                (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
-            eprintln!(
-                "[caption_pipeline] push_pcm: input={} resampled={} rms={:.4} vad_detected={}",
-                samples.len(),
-                resampled.len(),
-                rms,
-                self.vad.detected()
-            );
-        } else {
-            eprintln!(
-                "[caption_pipeline] push_pcm: input={} resampled=0 (buffering)",
-                samples.len()
-            );
-        }
+        // (commented out to reduce log spam)
+        // if !resampled.is_empty() {
+        //     let rms =
+        //         (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
+        //     eprintln!(
+        //         "[caption_pipeline] push_pcm: input={} resampled={} rms={:.4} vad_detected={}",
+        //         samples.len(),
+        //         resampled.len(),
+        //         rms,
+        //         self.vad.detected()
+        //     );
+        // } else {
+        //     eprintln!(
+        //         "[caption_pipeline] push_pcm: input={} resampled=0 (buffering)",
+        //         samples.len()
+        //     );
+        // }
 
         if !resampled.is_empty() {
             let segments = self.vad.push(&resampled);
@@ -321,12 +322,12 @@ impl CaptionPipeline {
                 }
             }
 
-            eprintln!(
-                "[caption_pipeline] vad produced {} segments",
-                segments.len()
-            );
-            for (i, seg) in segments.iter().enumerate() {
-                eprintln!("[caption_pipeline] segment {}: {} samples", i, seg.len());
+            // eprintln!(
+            //     "[caption_pipeline] vad produced {} segments",
+            //     segments.len()
+            // );
+            for (_i, seg) in segments.iter().enumerate() {
+                // eprintln!("[caption_pipeline] segment {}: {} samples", i, seg.len());
                 if let Some(tx) = &self.job_tx {
                     let _ = tx.send(WorkerJob::Segment(SegmentJob {
                         samples: seg.clone(),
@@ -448,11 +449,11 @@ fn worker_loop(
             continue;
         }
 
-        eprintln!(
-            "[caption_pipeline] worker: transcribing {} samples (is_final={})",
-            samples.len(),
-            is_final
-        );
+        // eprintln!(
+        //     "[caption_pipeline] worker: transcribing {} samples (is_final={})",
+        //     samples.len(),
+        //     is_final
+        // );
         let original = match backend.transcribe(&samples, &language) {
             Ok(text) => {
                 eprintln!("[caption_pipeline] worker: transcribed='{}'", text);
@@ -515,10 +516,10 @@ fn worker_loop(
             translated,
             is_final,
         };
-        eprintln!(
-            "[caption_pipeline] worker: sending caption event (is_final={})",
-            is_final
-        );
+        // eprintln!(
+        //     "[caption_pipeline] worker: sending caption event (is_final={})",
+        //     is_final
+        // );
         if tx.send(event).is_err() {
             worker_busy.store(false, Ordering::Relaxed);
             break;
