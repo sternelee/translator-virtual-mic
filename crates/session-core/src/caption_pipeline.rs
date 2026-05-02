@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use common::{EngineError, LocalMtConfig, LocalSttConfig, MtConfig, Result, TtsConfig};
+use common::{CosyVoiceTtsConfig, EngineError, LocalMtConfig, LocalSttConfig, MtConfig, Result, TtsConfig};
+use tts_cosyvoice::{CosyVoiceClient, CosyVoiceConfig};
 use mt_client::{MtClient, MtClientConfig};
 use mt_local::{load_backend as load_local_mt_backend, LocalMtBackend};
 use stt_local::audio::{stereo_to_mono, CachedResampler};
@@ -108,6 +109,7 @@ impl CaptionPipeline {
         mt: Option<&MtConfig>,
         tts: Option<&TtsConfig>,
         local_mt_cfg: Option<&LocalMtConfig>,
+        cosyvoice_cfg: Option<&CosyVoiceTtsConfig>,
     ) -> Result<Self> {
         eprintln!(
             "[caption_pipeline] from_config: model_id={} model_dir={:?} vad_path={:?}",
@@ -194,6 +196,31 @@ impl CaptionPipeline {
             _ => None,
         };
 
+        // Optional CosyVoice TTS client (preferred over sherpa-onnx TTS if both enabled).
+        let cosyvoice_client: Option<CosyVoiceClient> = match cosyvoice_cfg {
+            Some(cfg) if cfg.enabled => {
+                let cv_cfg = CosyVoiceConfig {
+                    endpoint: cfg.endpoint.clone(),
+                    prompt_wav_path: cfg.prompt_wav_path.clone(),
+                    prompt_text: cfg.prompt_text.clone(),
+                };
+                match CosyVoiceClient::new(cv_cfg) {
+                    Ok(client) => {
+                        eprintln!(
+                            "[caption_pipeline] CosyVoice TTS client ready (endpoint={})",
+                            cfg.endpoint
+                        );
+                        Some(client)
+                    }
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] CosyVoice TTS init failed: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let partial_interval = Duration::from_millis(stt.partial_interval_ms);
         let max_partial_samples = (stt.max_partial_window_seconds * 16_000.0) as usize;
         let overlap_tail_samples = ((stt.overlap_tail_ms as f32 / 1000.0) * 16_000.0) as usize;
@@ -212,6 +239,7 @@ impl CaptionPipeline {
                     mt_client,
                     local_mt_backend,
                     tts_backend,
+                    cosyvoice_client,
                     target_lang,
                     local_mt_target_lang,
                     job_rx,
@@ -432,6 +460,7 @@ fn worker_loop(
     mt: Option<Arc<MtClient>>,
     local_mt: Option<Box<dyn LocalMtBackend>>,
     tts: Option<TtsBackend>,
+    cosyvoice: Option<CosyVoiceClient>,
     target_lang: String,
     local_mt_target_lang: String,
     rx: Receiver<WorkerJob>,
@@ -502,27 +531,59 @@ fn worker_loop(
             None
         };
 
-        // TTS: use translated text if available, else original STT text.
-        // Dedup: skip synthesis if the candidate text equals the last synthesized text.
-        // On final: reset last_tts_text after synthesis so the next partial starts fresh.
+        // TTS: CosyVoice takes priority over sherpa-onnx if both configured.
+        // Dedup: skip if candidate equals last synthesized text.
+        // On final: clear dedup state.
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
-        if let Some(ref tts_backend) = tts {
-            if !tts_candidate.trim().is_empty() && tts_candidate.trim() != last_tts_text.trim() {
-                match tts_backend.synthesize(tts_candidate) {
-                    Ok((tts_samples, sample_rate)) => {
+        let has_tts = cosyvoice.is_some() || tts.is_some();
+        if has_tts
+            && !tts_candidate.trim().is_empty()
+            && tts_candidate.trim() != last_tts_text.trim()
+        {
+            let audio_result: Option<(Vec<f32>, u32)> = if let Some(ref cv) = cosyvoice {
+                match cv.synthesize(tts_candidate) {
+                    Ok((samples, rate)) if !samples.is_empty() => {
                         eprintln!(
-                            "[caption_pipeline] worker: TTS produced {} samples @ {}Hz (is_final={})",
-                            tts_samples.len(), sample_rate, is_final
+                            "[caption_pipeline] worker: CosyVoice TTS produced {} samples @ {}Hz (is_final={})",
+                            samples.len(),
+                            rate,
+                            is_final
                         );
-                        let _ = audio_tx.send(AudioChunk {
-                            samples: tts_samples,
-                            sample_rate,
-                            timestamp_ns,
-                        });
-                        last_tts_text = tts_candidate.to_string();
+                        Some((samples, rate))
                     }
-                    Err(e) => eprintln!("[caption_pipeline] worker: TTS error: {e}"),
+                    Ok(_) => None,
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] worker: CosyVoice TTS error: {e}");
+                        None
+                    }
                 }
+            } else if let Some(ref tts_backend) = tts {
+                match tts_backend.synthesize(tts_candidate) {
+                    Ok((samples, rate)) => {
+                        eprintln!(
+                            "[caption_pipeline] worker: sherpa TTS produced {} samples @ {}Hz (is_final={})",
+                            samples.len(),
+                            rate,
+                            is_final
+                        );
+                        Some((samples, rate))
+                    }
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] worker: TTS error: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some((tts_samples, sample_rate)) = audio_result {
+                let _ = audio_tx.send(AudioChunk {
+                    samples: tts_samples,
+                    sample_rate,
+                    timestamp_ns,
+                });
+                last_tts_text = tts_candidate.to_string();
             }
         }
         if is_final {

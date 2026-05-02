@@ -386,11 +386,12 @@ impl EngineSession {
         let mt = self.config.mt.clone();
         let tts = self.config.tts.clone();
         let local_mt = self.config.local_mt.clone();
+        let cosyvoice_tts = self.config.cosyvoice_tts.clone();
         eprintln!(
             "[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
             stt.model_id, stt.model_dir, stt.vad_model_path
         );
-        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref()) {
+        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref(), cosyvoice_tts.as_ref()) {
             Ok(pipeline) => {
                 eprintln!("[session-core] caption pipeline ready");
                 self.caption_pipeline = Some(pipeline);
