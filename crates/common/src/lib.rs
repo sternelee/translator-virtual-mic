@@ -146,6 +146,55 @@ impl Default for TtsConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct CosyVoiceTtsConfig {
+    pub enabled: bool,
+    /// HTTP base URL of the CosyVoice FastAPI server.
+    pub endpoint: String,
+    /// Path to reference voice WAV (5–10 s, mono 16kHz recommended).
+    pub prompt_wav_path: std::path::PathBuf,
+    /// Transcript of the reference WAV (improves naturalness; can be empty).
+    pub prompt_text: String,
+}
+
+impl Default for CosyVoiceTtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:50000".to_string(),
+            prompt_wav_path: {
+                let home = std::env::var("HOME").unwrap_or_default();
+                std::path::PathBuf::from(home)
+                    .join(".translator_virtual_mic")
+                    .join("ref_voice.wav")
+            },
+            prompt_text: String::new(),
+        }
+    }
+}
+
+impl CosyVoiceTtsConfig {
+    pub fn from_json_lossy(raw: &str, _engine_config: &EngineConfig) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "cosyvoice_tts_enabled").unwrap_or(false);
+        let mentions = raw.contains("cosyvoice_tts_");
+        if !enabled && !mentions {
+            return None;
+        }
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(ep) = extract_string_value(raw, "cosyvoice_tts_endpoint") {
+            cfg.endpoint = ep;
+        }
+        if let Some(wav) = extract_string_value(raw, "cosyvoice_tts_prompt_wav_path") {
+            cfg.prompt_wav_path = std::path::PathBuf::from(expand_tilde(&wav));
+        }
+        if let Some(pt) = extract_string_value(raw, "cosyvoice_tts_prompt_text") {
+            cfg.prompt_text = pt;
+        }
+        Some(cfg)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
     pub target_language: String,
@@ -161,6 +210,7 @@ pub struct EngineConfig {
     pub mt: Option<MtConfig>,
     pub tts: Option<TtsConfig>,
     pub local_mt: Option<LocalMtConfig>,
+    pub cosyvoice_tts: Option<CosyVoiceTtsConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -182,6 +232,7 @@ impl Default for EngineConfig {
             mt: None,
             tts: None,
             local_mt: None,
+            cosyvoice_tts: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -248,6 +299,9 @@ impl EngineConfig {
         }
         if let Some(local_mt) = LocalMtConfig::from_json_lossy(raw, &config) {
             config.local_mt = Some(local_mt);
+        }
+        if let Some(cosyvoice_tts) = CosyVoiceTtsConfig::from_json_lossy(raw, &config) {
+            config.cosyvoice_tts = Some(cosyvoice_tts);
         }
 
         config
@@ -673,6 +727,23 @@ mod tests {
         assert!(stt.enabled);
         assert_eq!(stt.model_id, "paraformer-zh");
         assert!((stt.vad_threshold - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosyvoice_tts_parsed_from_json() {
+        let config = EngineConfig::from_json_lossy(
+            r#"{"cosyvoice_tts_enabled":true,"cosyvoice_tts_endpoint":"http://127.0.0.1:50000","cosyvoice_tts_prompt_text":"hello"}"#,
+        );
+        let cv = config.cosyvoice_tts.expect("cosyvoice_tts should parse");
+        assert!(cv.enabled);
+        assert_eq!(cv.endpoint, "http://127.0.0.1:50000");
+        assert_eq!(cv.prompt_text, "hello");
+    }
+
+    #[test]
+    fn cosyvoice_tts_absent_when_not_mentioned() {
+        let config = EngineConfig::from_json_lossy(r#"{}"#);
+        assert!(config.cosyvoice_tts.is_none());
     }
 
     #[test]
