@@ -113,11 +113,10 @@ final class ModelDownloadService: NSObject, ObservableObject {
 
     func isTtsModelDownloaded(_ model: TtsModelInfo) -> Bool {
         let dir = modelsDir.appendingPathComponent("tts").appendingPathComponent(model.id)
-        return model.files.allSatisfy { file in
-            let path = dir.appendingPathComponent(file.relativePath)
-            return FileManager.default.fileExists(atPath: path.path)
-                && ((try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? Int64) ?? 0) > 0
-        }
+        let modelOnnx = dir.appendingPathComponent("model.onnx")
+        let espeak = dir.appendingPathComponent("espeak-ng-data")
+        return FileManager.default.fileExists(atPath: modelOnnx.path)
+            && FileManager.default.fileExists(atPath: espeak.path)
     }
 
     func deleteTtsModel(_ model: TtsModelInfo) {
@@ -134,7 +133,7 @@ final class ModelDownloadService: NSObject, ObservableObject {
         currentTtsModel = model
         currentTtsFileIndex = 0
         ttsState = .idle
-        downloadNextTtsFile()
+        downloadTtsArchive()
     }
 
     func cancelTtsDownload() {
@@ -144,46 +143,76 @@ final class ModelDownloadService: NSObject, ObservableObject {
         ttsState = .idle
     }
 
-    private func downloadNextTtsFile() {
-        guard let model = currentTtsModel, currentTtsFileIndex < model.files.count else {
+    private func downloadTtsArchive() {
+        guard let model = currentTtsModel else { return }
+
+        // Skip if already extracted
+        if isTtsModelDownloaded(model) {
             ttsState = .completed
             currentTtsTask = nil
             currentTtsModel = nil
             return
         }
 
-        let file = model.files[currentTtsFileIndex]
-        let dir = modelsDir
-            .appendingPathComponent("tts")
-            .appendingPathComponent(model.id)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dest = dir.appendingPathComponent(file.relativePath)
-
-        if FileManager.default.fileExists(atPath: dest.path),
-           let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
-           let size = attrs[.size] as? Int64, size > 0 {
-            currentTtsFileIndex += 1
-            downloadNextTtsFile()
+        guard let url = URL(string: model.tarballUrl) else {
+            ttsState = .failed("Invalid tarball URL for \(model.id)")
             return
         }
 
-        guard let url = URL(string: file.url) else {
-            ttsState = .failed("Invalid URL for \(file.relativePath)")
-            return
-        }
+        let ttsDir = modelsDir.appendingPathComponent("tts")
+        try? FileManager.default.createDirectory(at: ttsDir, withIntermediateDirectories: true)
 
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
         let task = session.downloadTask(with: url)
         currentTtsTask = task
+        let archiveName = url.lastPathComponent
         ttsState = .downloading(progress: DownloadProgress(
             modelId: model.id,
-            fileName: file.relativePath,
+            fileName: archiveName,
             downloadedBytes: 0,
-            totalBytes: file.sizeBytes,
-            fileIndex: currentTtsFileIndex,
-            totalFiles: model.files.count
+            totalBytes: model.tarballSizeBytes,
+            fileIndex: 0,
+            totalFiles: 1
         ))
         task.resume()
+    }
+
+    private func extractTtsArchive(from tmp: URL, model: TtsModelInfo) {
+        let ttsDir = modelsDir.appendingPathComponent("tts")
+        let archiveDest = ttsDir.appendingPathComponent("\(model.id).tar.bz2")
+        try? FileManager.default.removeItem(at: archiveDest)
+        do {
+            try FileManager.default.moveItem(at: tmp, to: archiveDest)
+        } catch {
+            ttsState = .failed("Failed to stage archive: \(error.localizedDescription)")
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+            proc.arguments = ["xjf", archiveDest.path, "-C", ttsDir.path]
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+            } catch {
+                DispatchQueue.main.async {
+                    self?.ttsState = .failed("tar extraction failed: \(error.localizedDescription)")
+                }
+                return
+            }
+            try? FileManager.default.removeItem(at: archiveDest)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.isTtsModelDownloaded(model) {
+                    self.ttsState = .completed
+                } else {
+                    self.ttsState = .failed("Extraction incomplete — espeak-ng-data missing")
+                }
+                self.currentTtsTask = nil
+                self.currentTtsModel = nil
+            }
+        }
     }
 
     private func downloadNextMtFile() {
@@ -297,15 +326,15 @@ extension ModelDownloadService: URLSessionDownloadDelegate {
                 totalFiles: model.files.count
             ))
         } else if let model = currentTtsModel, downloadTask == currentTtsTask {
-            let file = model.files[currentTtsFileIndex]
-            let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : file.sizeBytes
+            let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : model.tarballSizeBytes
+            let archiveName = URL(string: model.tarballUrl)?.lastPathComponent ?? "\(model.id).tar.bz2"
             ttsState = .downloading(progress: DownloadProgress(
                 modelId: model.id,
-                fileName: file.relativePath,
+                fileName: archiveName,
                 downloadedBytes: totalBytesWritten,
                 totalBytes: total,
-                fileIndex: currentTtsFileIndex,
-                totalFiles: model.files.count
+                fileIndex: 0,
+                totalFiles: 1
             ))
         }
     }
@@ -328,14 +357,7 @@ extension ModelDownloadService: URLSessionDownloadDelegate {
             currentMtFileIndex += 1
             downloadNextMtFile()
         } else if let model = currentTtsModel, downloadTask == currentTtsTask {
-            let file = model.files[currentTtsFileIndex]
-            let dest = modelsDir
-                .appendingPathComponent("tts")
-                .appendingPathComponent(model.id)
-                .appendingPathComponent(file.relativePath)
-            moveDownloadedFile(from: location, to: dest)
-            currentTtsFileIndex += 1
-            downloadNextTtsFile()
+            extractTtsArchive(from: location, model: model)
         }
     }
 
