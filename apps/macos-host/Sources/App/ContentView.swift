@@ -27,6 +27,11 @@ struct ContentView: View {
                             Text(provider.displayName).tag(provider)
                         }
                     }
+                    .onChange(of: viewModel.selectedTranslationProvider) { _, newValue in
+                        if newValue == .localCaption {
+                            viewModel.localMtEnabled = true
+                        }
+                    }
                     Picker("Target Language", selection: $viewModel.targetLanguage) {
                         Text("English").tag("en")
                         Text("Chinese").tag("zh")
