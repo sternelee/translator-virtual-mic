@@ -2,124 +2,149 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+`AGENTS.md` is the canonical contributor reference. This file captures Claude-specific operational notes; consult `AGENTS.md` for code style, naming, and full command reference.
+
 ## Core commands
 
 Run from repo root.
 
 ### Rust workspace
-- `cargo check` — primary workspace validation
+- `cargo check` — primary validation
+- `cargo clippy` — workspace lints (`clippy::pedantic = warn`); fix, don't suppress
+- `cargo fmt` — must be clean before committing
 - `cargo test` — workspace tests
-- `cargo build --release` — release build
-- `cargo test -p output-bridge` — run a single crate’s tests
-- `cargo test -p output-bridge writes_and_reads_interleaved_pcm` — run a single test
-- `cargo run -p demo-cli` — run engine/session demo
-- `cargo run -p demo-cli --bin emit_shared_output` — write sample PCM into shared output file for native plug-in tests
+- `cargo test -p <crate>` — single crate (e.g. `output-bridge`)
+- `cargo test -p output-bridge writes_and_reads_interleaved_pcm` — single test
+- `cargo build --release`
+- `cargo run -p demo-cli` — engine/session smoke
+- `cargo run -p demo-cli --bin emit_shared_output` — emit sample PCM into shared buffer
 
-### Repo helper scripts
-- `./scripts/build-dev.sh` — currently runs `cargo test`
-- `./scripts/build-release.sh` — currently runs `cargo check`
-- `./scripts/run-integration-tests.sh` — currently runs `cargo build --release`
+### Helper scripts (verified mappings)
+| Script | Runs |
+|--------|------|
+| `./scripts/build-dev.sh` | `cargo check` |
+| `./scripts/build-release.sh` | `cargo build --release` |
+| `./scripts/run-integration-tests.sh` | `cargo test` |
+| `./scripts/generate-ffi-header.sh` | regenerates `native/macos/ffi-headers/engine_api.h` (do not hand-edit) |
 
 ### Swift host app
-- `cd apps/macos-host && swift build`
-- `cp apps/macos-host/.build/arm64-apple-macosx/debug/TranslatorVirtualMicHost apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/`
-- Run with: `TRANSLATOR_ENGINE_DYLIB=/Users/sternelee/www/github/translator-virtual-mic/target/debug/libengine_api.dylib /Users/sternelee/www/github/translator-virtual-mic/apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost`
+```bash
+cd apps/macos-host && swift build
+cp apps/macos-host/.build/arm64-apple-macosx/debug/TranslatorVirtualMicHost \
+   apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/
 
-### Native virtual-mic plug-in + verifier
-- `./native/macos/scripts/build-plugin-bundle.sh` — build + ad-hoc sign `.driver` bundle
-- `./native/macos/scripts/validate-plugin-bundle.sh` — validate bundle metadata/layout/signature
-- `./native/macos/scripts/check-plugin-scaffold.sh` — end-to-end scaffold check (Rust shared output + ObjC++ render/driver testers + bundle build)
-- `./native/macos/scripts/build-hal-smoke-verifier.sh` — compile HAL verifier CLI
-- `./native/macos/scripts/run-hal-smoke-verifier.sh --allow-missing` — pre-install check
-- `./native/macos/scripts/run-hal-smoke-verifier.sh --uid translator.virtual.mic.device` — strict post-install check
-- `./native/macos/scripts/run-hal-smoke-verifier.sh --list` — list CoreAudio devices
+# dylib must be built first (cargo build)
+TRANSLATOR_ENGINE_DYLIB=$(pwd)/target/debug/libengine_api.dylib \
+  ./apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost
+```
+Requires macOS 14+. Links SwiftUI, AppKit, AVFoundation, CoreAudio, CoreMedia, AudioToolbox.
+
+### Native plug-in + verifier
+```bash
+./native/macos/scripts/build-plugin-bundle.sh        # build + ad-hoc sign .driver
+./native/macos/scripts/validate-plugin-bundle.sh     # validate metadata/layout/signature
+./native/macos/scripts/check-plugin-scaffold.sh      # end-to-end (Rust + ObjC++ testers + bundle)
+./native/macos/scripts/build-hal-smoke-verifier.sh
+./native/macos/scripts/run-hal-smoke-verifier.sh --allow-missing                          # pre-install
+./native/macos/scripts/run-hal-smoke-verifier.sh --uid translator.virtual.mic.device      # strict post-install
+./native/macos/scripts/run-hal-smoke-verifier.sh --uid translator.virtual.mic.device --no-strict
+./native/macos/scripts/run-hal-smoke-verifier.sh --list
+```
 
 ### Plug-in deployment
-- Dry run: `./native/macos/scripts/deploy-plugin-bundle.sh`
-- Real install to system HAL path: `APPLY=1 TARGET_ROOT=/ ./native/macos/scripts/deploy-plugin-bundle.sh`
-  - Installs to `/Library/Audio/Plug-Ins/HAL/TranslatorVirtualMic.driver` and requires `sudo`.
+```bash
+# Local staging only (no /Library writes)
+./native/macos/scripts/install-plugin-bundle.sh      # → native/macos/build/install-root
+./native/macos/scripts/uninstall-plugin-bundle.sh
 
-### FFI header refresh
-- `./scripts/generate-ffi-header.sh` writes `native/macos/ffi-headers/engine_api.h`
+# System install (requires sudo, reboot before verifying)
+./native/macos/scripts/deploy-plugin-bundle.sh                                   # dry run
+APPLY=1 TARGET_ROOT=/ ./native/macos/scripts/deploy-plugin-bundle.sh             # real install
+# → /Library/Audio/Plug-Ins/HAL/TranslatorVirtualMic.driver
+```
 
-## Testing flow
+## Realtime provider env vars
 
-### Full integration test
-1. Build Swift host: `cd apps/macos-host && swift build && cp .build/arm64-apple-macosx/debug/TranslatorVirtualMicHost TranslatorVirtualMicHost.app/Contents/MacOS/`
-2. Run Swift host: `TRANSLATOR_ENGINE_DYLIB=/Users/sternelee/www/github/translator-virtual-mic/target/debug/libengine_api.dylib ./apps/macos-host/TranslatorVirtualMicHost.app/Contents/MacOS/TranslatorVirtualMicHost`
-3. In the app window, click **Start** button (status should show “Listening”)
-4. Open **QuickTime Player** → File → New Audio Recording
-5. Click the dropdown next to record button, select **Translator Virtual Mic**
-6. Start recording, speak into physical microphone
-7. Stop and playback to verify audio
+`config/default.toml` selects provider (`openai_realtime` or `azure_voice_live`).
+
+```bash
+# OpenAI Realtime
+export OPENAI_API_KEY=...
+export OPENAI_REALTIME_MODEL=gpt-realtime
+export OPENAI_REALTIME_VOICE_NAME=marin
+export OPENAI_REALTIME_ENDPOINT=wss://api.openai.com/v1/realtime  # optional
+
+# Azure Voice Live
+export AZURE_VOICELIVE_ENDPOINT=...
+export AZURE_VOICELIVE_API_KEY=...
+```
+
+## Architecture (big picture)
+
+Scaffold-first prototype: validates boundaries before ASR/MT/TTS exists.
+
+```
+Swift host (AVFoundation mic)
+  → Rust engine via C ABI (engine-api cdylib)
+    → session-core pipeline (rings, mode, metrics)
+      → output-bridge (file-backed shared buffer)
+        → ObjC++ AudioServerPlugIn (reader)
+          → CoreAudio virtual device (HAL)
+```
+
+### Crates (`crates/`)
+- `common` — shared config/types
+- `metrics` — collection + JSON export
+- `audio-core` — DSP primitives
+- `output-bridge` — file-backed PCM bridge (writer side)
+- `session-core` — runtime session, ring buffers, mode behavior, metrics, shared output wiring
+- `engine-api` — C ABI cdylib, `EngineHandle` lifecycle
+- `demo-cli` — `demo-cli` + `emit_shared_output` smoke binaries
+
+### Native (`native/macos/`)
+- `virtual-mic-plugin/Sources` — ObjC++ AudioServerPlugIn + shared-buffer reader
+- `hal-smoke-verifier` — Swift CLI for CoreAudio enumeration/property checks
+- `ffi-headers/engine_api.h` — checked-in, regenerated by script
+
+### Integration contracts (do not break casually)
+| Contract | Value |
+|----------|-------|
+| Rust ↔ Swift | C ABI via `engine_*` exports; header at `native/macos/ffi-headers/engine_api.h` |
+| Shared buffer | `/tmp/translator_virtual_mic/shared_output.bin` (file-backed; not yet mmap/lock-free) |
+| Virtual device format | mono, 48 kHz, float32 |
+| Dylib for host | `target/{debug,release}/libengine_api.dylib` |
+
+## Hard constraints
+- **No heap allocation, blocking, or network calls in audio callback paths.**
+- **Do not couple AI pipeline work into plug-in/HAL logic.** Shared output bridge is the intentional decoupling seam.
+- **FFI**: null-check pointers; on error return `-1` and stash via `set_last_error()`. No `unwrap()` on fallible ops outside tests.
+
+## Status (per AGENTS.md 2026-04-12)
+
+Working: physical mic capture, Rust engine, shared buffer write, HAL plug-in enumerated, **QuickTime recording through virtual mic**, Bluetooth headset input with sample-rate adaptation.
+
+Deferred: VAD, ASR, MT, TTS, Azure Voice Live end-to-end live session, lock-free buffers, conferencing app validation.
+
+## Manual integration test
+1. `cargo build` (produce `libengine_api.dylib`)
+2. Build + copy Swift host (see Swift section above)
+3. Run host with `TRANSLATOR_ENGINE_DYLIB=…`; click **Start** → status “Listening”
+4. QuickTime → File → New Audio Recording → select **Translator Virtual Mic** → record → playback
 
 ### Verify shared buffer
 ```bash
-python3 -c “
+python3 -c "
 import struct
-f = open(‘/tmp/translator_virtual_mic/shared_output.bin’, ‘rb’)
+f = open('/tmp/translator_virtual_mic/shared_output.bin', 'rb')
 h = f.read(48)
-wi = struct.unpack(‘<Q’, h[24:32])[0]
-ri = struct.unpack(‘<Q’, h[32:40])[0]
-s = struct.unpack(‘<10f’, f.read(40))
-print(f’write={wi} read={ri} samples={[round(x,4) for x in s]}’)
-“
+wi = struct.unpack('<Q', h[24:32])[0]
+ri = struct.unpack('<Q', h[32:40])[0]
+s = struct.unpack('<10f', f.read(40))
+print(f'write={wi} read={ri} samples={[round(x,4) for x in s]}')
+"
 ```
 
-## Current status (2026-04-07)
-
-### Working
-- ✅ Physical microphone capture (Swift/AVFoundation)
-- ✅ PCM data flowing to Rust engine via FFI
-- ✅ Shared buffer write (Rust output-bridge)
-- ✅ HAL plugin successfully enumerated by CoreAudio
-- ✅ Virtual device appears in audio device list (see [docs/troubleshooting.md](docs/troubleshooting.md) for enumeration fixes)
-
-### Not working
-- ❌ QuickTime cannot record audio from Translator Virtual Mic
-- ❌ HAL plugin DoIOOperation not producing audio output (SharedBufferReader reading but not yet flowing)
-
-### Data flow
-```
-Physical Mic → Swift Host → Rust Engine → Shared Buffer → HAL Plugin → Virtual Mic → QuickTime
-     ✅            ✅            ✅              ✅              ❌            ❌
-```
-
-### Next steps to debug
-1. Check HAL plugin `DoIOOperation` logs to see if it’s being called
-2. Verify `SharedBufferReader` is reading correct data
-3. Check if `read_index` is being updated by plugin (consumer)
-4. May need to add more logging to `translator_virtual_mic_driver.mm`
-
-## Architecture overview
-
-### Big picture
-This repo is a macOS-first prototype for a realtime “translator virtual microphone.” Current implementation is scaffold-first: it validates boundaries and data flow before ASR/MT/TTS exists.
-
-Main chain:
-1. Swift host captures mic audio (AVFoundation).
-2. Swift pushes PCM into Rust engine via C ABI (`engine-api` cdylib).
-3. Rust session pipeline currently runs bypass/silence-style behavior and metrics.
-4. Rust mirrors output into a file-backed shared buffer at `/tmp/translator_virtual_mic/shared_output.bin`.
-5. macOS Audio Server Plug-in scaffold reads that shared buffer and exposes HAL driver/device/stream skeleton.
-6. HAL smoke verifier checks whether CoreAudio enumerates expected virtual-device properties.
-
-### Repository structure (functional)
-- `crates/session-core`: central runtime session state (rings, mode behavior, metrics hooks, shared output wiring).
-- `crates/engine-api`: C ABI surface and `EngineHandle` lifecycle for Swift interop.
-- `crates/output-bridge`: file-backed shared buffer contract used by Rust writer and plug-in reader.
-- `crates/demo-cli`: narrow-path validation binaries (`demo-cli`, `emit_shared_output`).
-- `apps/macos-host`: SwiftUI/AppKit host scaffold, mic permission/device selection, capture, runtime dylib loading.
-- `native/macos/virtual-mic-plugin`: ObjC++ AudioServerPlugIn scaffold and render-source/shared-buffer reader.
-- `native/macos/hal-smoke-verifier`: Swift CLI for CoreAudio enumeration/property checks.
-
-### Important integration contracts
-- Rust/Swift boundary is C ABI, header at `native/macos/ffi-headers/engine_api.h`.
-- Shared output bridge is currently file-backed (not mmap/lock-free yet).
-- Virtual device target format is mono, 48 kHz, float32.
-- Current bottleneck is HAL plugin audio output - plugin is enumerated but not producing audio.
-
-## Current state constraints to preserve
-- Keep audio-callback-path assumptions lightweight: no network-bound work in callback paths.
-- Do not couple future AI pipeline work directly into plug-in/HAL logic; the shared output bridge is the decoupling seam.
-- Prefer validating via existing scaffold scripts before broad refactors of plug-in structure.
+## Notes for future Claude sessions
+- Prefer running existing scaffold scripts (`check-plugin-scaffold.sh`, HAL verifier) before broad refactors of plug-in structure.
+- After HAL contract or bundle changes that touch the system install: reboot before re-running the strict verifier.
+- Convert relative dates to absolute (e.g. `2026-04-12`) when updating status sections.

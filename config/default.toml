@@ -52,6 +52,21 @@ mt_base_url = "https://api.openai.com/v1"
 mt_model = "gpt-4o-mini"
 mt_api_key_env = "OPENAI_API_KEY"
 
+[local_stt]
+enabled = false
+model_id = "paraformer-zh"
+model_dir = "~/Library/Application Support/translator-virtual-mic/models"
+vad_model_path = "~/Library/Application Support/translator-virtual-mic/models/silero_vad.onnx"
+vad_threshold = 0.5
+language = "zh"
+
+[mt]
+enabled = false
+endpoint = "https://api.openai.com/v1/chat/completions"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
+target_language = "en"
+
 [virtual_device]
 name = "Translator Virtual Mic"
 preferred_sample_rate = 48000

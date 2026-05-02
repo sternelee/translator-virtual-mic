@@ -9,3 +9,6 @@ audio-core = { path = "../audio-core" }
 common = { path = "../common" }
 metrics = { path = "../metrics" }
 output-bridge = { path = "../output-bridge" }
+stt-local = { path = "../stt-local" }
+mt-client = { path = "../mt-client" }
+mt-local = { path = "../mt-local" }

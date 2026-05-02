@@ -101,6 +101,26 @@ final class EngineBox {
         return String(cString: raw)
     }
 
+    func takeNextCaptionEvent() -> String? {
+        guard let runtime, let handle else { return nil }
+        let bufferSize = 64 * 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        buffer.initialize(repeating: 0, count: bufferSize)
+        let written = runtime.takeNextCaptionEvent(handle, buffer, Int32(bufferSize))
+        guard written > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    func captionStateJSON() -> String {
+        guard let runtime, let handle, let raw = runtime.captionStateJson(handle) else {
+            return "{}"
+        }
+        return String(cString: raw)
+    }
+
     func lastError() -> String {
         if let runtimeError {
             return runtimeError

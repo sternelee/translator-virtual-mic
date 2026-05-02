@@ -13,6 +13,7 @@ pub struct EngineHandle {
     metrics_json: Mutex<CString>,
     shared_output_path: Mutex<CString>,
     translation_state_json: Mutex<CString>,
+    caption_state_json: Mutex<CString>,
 }
 
 impl EngineHandle {
@@ -25,6 +26,7 @@ impl EngineHandle {
             metrics_json: Mutex::new(cstring_clean("{}")),
             shared_output_path: Mutex::new(cstring_clean("")),
             translation_state_json: Mutex::new(cstring_clean("{}")),
+            caption_state_json: Mutex::new(cstring_clean("{}")),
         }
     }
 
@@ -85,6 +87,18 @@ impl EngineHandle {
             .translation_state_json
             .lock()
             .expect("translation_state_json poisoned") = cstring_clean(&state_json);
+    }
+
+    fn update_caption_state_cache(&self) {
+        let state_json = self
+            .session
+            .lock()
+            .expect("session poisoned")
+            .caption_state_json();
+        *self
+            .caption_state_json
+            .lock()
+            .expect("caption_state_json poisoned") = cstring_clean(&state_json);
     }
 }
 
@@ -479,6 +493,58 @@ pub extern "C" fn engine_push_translated_pcm(
     })
     .map(|_| 0)
     .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn engine_take_next_caption_event(
+    handle: *mut EngineHandle,
+    out_json: *mut c_char,
+    max_len: i32,
+) -> i32 {
+    with_handle(handle, |handle| {
+        if out_json.is_null() {
+            return Err("out_json pointer is null".to_string());
+        }
+        if max_len <= 0 {
+            return Err("max_len must be positive".to_string());
+        }
+
+        let maybe_event = handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .take_next_caption_event()
+            .map_err(|err| err.to_string())?;
+        let Some(event) = maybe_event else {
+            unsafe { ptr::write(out_json, 0) };
+            return Ok(0);
+        };
+
+        let bytes = event.as_bytes();
+        let writable = (max_len as usize).saturating_sub(1);
+        let copy_len = writable.min(bytes.len());
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out_json, copy_len);
+            ptr::write(out_json.add(copy_len), 0);
+        }
+        handle.update_caption_state_cache();
+        Ok(copy_len as i32)
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn engine_get_caption_state_json(handle: *mut EngineHandle) -> *const c_char {
+    if handle.is_null() {
+        return ptr::null();
+    }
+    let handle = unsafe { &*handle };
+    handle.update_caption_state_cache();
+    handle
+        .caption_state_json
+        .lock()
+        .expect("caption_state_json poisoned")
+        .as_ptr()
 }
 
 #[cfg(test)]

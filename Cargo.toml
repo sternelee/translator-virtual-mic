@@ -7,6 +7,9 @@ members = [
   "crates/session-core",
   "crates/engine-api",
   "crates/demo-cli",
+  "crates/stt-local",
+  "crates/mt-client",
+  "crates/mt-local",
 ]
 resolver = "2"
 

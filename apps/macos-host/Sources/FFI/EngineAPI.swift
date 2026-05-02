@@ -27,10 +27,12 @@ final class EngineRuntime {
     typealias PushInputPcmFn = @convention(c) (EngineHandleRef?, UnsafePointer<Float>?, Int32, Int32, Int32, UInt64) -> Int32
     typealias TakeNextTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
     typealias IngestTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafePointer<CChar>?) -> Int32
+    typealias TakeNextCaptionEventFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
     typealias LastErrorFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias MetricsJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias SharedOutputPathFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias TranslationStateJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
+    typealias CaptionStateJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias PushTranslatedPcmFn = @convention(c) (EngineHandleRef?, UnsafePointer<Float>?, Int32, Int32, Int32, UInt64) -> Int32
 
     let create: CreateFn
@@ -43,10 +45,12 @@ final class EngineRuntime {
     let pushInputPcm: PushInputPcmFn
     let takeNextTranslationEvent: TakeNextTranslationEventFn
     let ingestTranslationEvent: IngestTranslationEventFn
+    let takeNextCaptionEvent: TakeNextCaptionEventFn
     let lastError: LastErrorFn
     let metricsJson: MetricsJsonFn
     let sharedOutputPath: SharedOutputPathFn
     let translationStateJson: TranslationStateJsonFn
+    let captionStateJson: CaptionStateJsonFn
     let pushTranslatedPcm: PushTranslatedPcmFn
 
     private let dylibHandle: UnsafeMutableRawPointer
@@ -92,10 +96,12 @@ final class EngineRuntime {
             pushInputPcm: loadSymbol("engine_push_input_pcm", as: PushInputPcmFn.self),
             takeNextTranslationEvent: loadSymbol("engine_take_next_translation_event", as: TakeNextTranslationEventFn.self),
             ingestTranslationEvent: loadSymbol("engine_ingest_translation_event", as: IngestTranslationEventFn.self),
+            takeNextCaptionEvent: loadSymbol("engine_take_next_caption_event", as: TakeNextCaptionEventFn.self),
             lastError: loadSymbol("engine_get_last_error", as: LastErrorFn.self),
             metricsJson: loadSymbol("engine_get_metrics_json", as: MetricsJsonFn.self),
             sharedOutputPath: loadSymbol("engine_get_shared_output_path", as: SharedOutputPathFn.self),
             translationStateJson: loadSymbol("engine_get_translation_state_json", as: TranslationStateJsonFn.self),
+            captionStateJson: loadSymbol("engine_get_caption_state_json", as: CaptionStateJsonFn.self),
             pushTranslatedPcm: loadSymbol("engine_push_translated_pcm", as: PushTranslatedPcmFn.self)
         )
     }
@@ -144,10 +150,12 @@ final class EngineRuntime {
         pushInputPcm: PushInputPcmFn,
         takeNextTranslationEvent: TakeNextTranslationEventFn,
         ingestTranslationEvent: IngestTranslationEventFn,
+        takeNextCaptionEvent: TakeNextCaptionEventFn,
         lastError: LastErrorFn,
         metricsJson: MetricsJsonFn,
         sharedOutputPath: SharedOutputPathFn,
         translationStateJson: TranslationStateJsonFn,
+        captionStateJson: CaptionStateJsonFn,
         pushTranslatedPcm: PushTranslatedPcmFn
     ) {
         self.dylibHandle = dylibHandle
@@ -161,10 +169,12 @@ final class EngineRuntime {
         self.pushInputPcm = pushInputPcm
         self.takeNextTranslationEvent = takeNextTranslationEvent
         self.ingestTranslationEvent = ingestTranslationEvent
+        self.takeNextCaptionEvent = takeNextCaptionEvent
         self.lastError = lastError
         self.metricsJson = metricsJson
         self.sharedOutputPath = sharedOutputPath
         self.translationStateJson = translationStateJson
+        self.captionStateJson = captionStateJson
         self.pushTranslatedPcm = pushTranslatedPcm
     }
 

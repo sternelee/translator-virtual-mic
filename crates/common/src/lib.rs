@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EngineMode {
@@ -67,6 +68,76 @@ pub struct OpenAIRealtimeConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct LocalSttConfig {
+    pub enabled: bool,
+    pub model_id: String,
+    pub model_dir: PathBuf,
+    pub vad_model_path: PathBuf,
+    pub vad_threshold: f32,
+    pub language: String,
+}
+
+impl Default for LocalSttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: "paraformer-zh".to_string(),
+            model_dir: PathBuf::from(""),
+            vad_model_path: PathBuf::from(""),
+            vad_threshold: 0.5,
+            language: "auto".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MtConfig {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub api_key: String,
+    pub api_key_env: String,
+    pub model: String,
+    pub target_language: String,
+}
+
+impl Default for MtConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            api_key: String::new(),
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            target_language: "en".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TtsConfig {
+    pub enabled: bool,
+    /// "kokoro-en" | "kokoro-zh-en" | "melo-tts-zh" | "vits-mms-en" | custom
+    pub model_id: String,
+    pub model_dir: std::path::PathBuf,
+    /// Speaker id (sid) — 0 for single-speaker models
+    pub speaker_id: i32,
+    /// Playback speed multiplier (1.0 = normal)
+    pub speed: f32,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: "kokoro-en".to_string(),
+            model_dir: std::path::PathBuf::from(""),
+            speaker_id: 0,
+            speed: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
     pub target_language: String,
@@ -78,6 +149,10 @@ pub struct EngineConfig {
     pub translation_provider: TranslationProvider,
     pub azure_voice_live: Option<AzureVoiceLiveConfig>,
     pub openai_realtime: Option<OpenAIRealtimeConfig>,
+    pub local_stt: Option<LocalSttConfig>,
+    pub mt: Option<MtConfig>,
+    pub tts: Option<TtsConfig>,
+    pub local_mt: Option<LocalMtConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -95,6 +170,10 @@ impl Default for EngineConfig {
             translation_provider: TranslationProvider::None,
             azure_voice_live: None,
             openai_realtime: None,
+            local_stt: None,
+            mt: None,
+            tts: None,
+            local_mt: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -113,6 +192,15 @@ impl EngineConfig {
         }
         if raw.contains("\"mode\":\"translate\"") || raw.contains("mode = \"translate\"") {
             config.mode = EngineMode::Translate;
+        }
+        if raw.contains("\"mode\":\"caption_only\"") || raw.contains("mode = \"caption_only\"") {
+            config.mode = EngineMode::CaptionOnly;
+        }
+        if raw.contains("\"mode\":\"mute_on_failure\"") || raw.contains("mode = \"mute_on_failure\"") {
+            config.mode = EngineMode::MuteOnFailure;
+        }
+        if raw.contains("\"mode\":\"fallback_to_bypass\"") || raw.contains("mode = \"fallback_to_bypass\"") {
+            config.mode = EngineMode::FallbackToBypass;
         }
         if raw.contains("\"target\":\"zh\"") || raw.contains("target = \"zh\"") {
             config.target_language = "zh".to_string();
@@ -136,6 +224,18 @@ impl EngineConfig {
         }
         if let Some(openai_realtime) = OpenAIRealtimeConfig::from_json_lossy(raw, &config) {
             config.openai_realtime = Some(openai_realtime);
+        }
+        if let Some(local_stt) = LocalSttConfig::from_json_lossy(raw, &config) {
+            config.local_stt = Some(local_stt);
+        }
+        if let Some(mt) = MtConfig::from_json_lossy(raw, &config) {
+            config.mt = Some(mt);
+        }
+        if let Some(tts) = TtsConfig::from_json_lossy(raw, &config) {
+            config.tts = Some(tts);
+        }
+        if let Some(local_mt) = LocalMtConfig::from_json_lossy(raw, &config) {
+            config.local_mt = Some(local_mt);
         }
 
         config
@@ -219,6 +319,147 @@ impl OpenAIRealtimeConfig {
             enable_server_vad,
         })
     }
+}
+
+impl LocalSttConfig {
+    pub fn from_json_lossy(raw: &str, engine_config: &EngineConfig) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "local_stt_enabled").unwrap_or(false);
+        let mentions_local_stt = raw.contains("local_stt_") || raw.contains("\"local_stt_");
+        if !enabled && !mentions_local_stt {
+            return None;
+        }
+
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(model_id) = extract_string_value(raw, "local_stt_model_id") {
+            cfg.model_id = model_id;
+        }
+        if let Some(model_dir) = extract_string_value(raw, "local_stt_model_dir") {
+            cfg.model_dir = PathBuf::from(expand_tilde(&model_dir));
+        }
+        if let Some(vad_model_path) = extract_string_value(raw, "local_stt_vad_model_path") {
+            cfg.vad_model_path = PathBuf::from(expand_tilde(&vad_model_path));
+        }
+        if let Some(vad_threshold) = extract_f32_value(raw, "local_stt_vad_threshold") {
+            cfg.vad_threshold = vad_threshold;
+        }
+        cfg.language = extract_string_value(raw, "local_stt_language")
+            .unwrap_or_else(|| engine_config.source_language.clone());
+        Some(cfg)
+    }
+}
+
+impl MtConfig {
+    pub fn from_json_lossy(raw: &str, engine_config: &EngineConfig) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "mt_enabled").unwrap_or(false);
+        let mentions_mt = raw.contains("\"mt_") || raw.contains("mt_endpoint")
+            || raw.contains("mt_model") || raw.contains("mt_api_key");
+        if !enabled && !mentions_mt {
+            return None;
+        }
+
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(endpoint) = extract_string_value(raw, "mt_endpoint") {
+            cfg.endpoint = endpoint;
+        }
+        if let Some(api_key) = extract_string_value(raw, "mt_api_key") {
+            cfg.api_key = api_key;
+        }
+        if let Some(api_key_env) = extract_string_value(raw, "mt_api_key_env") {
+            cfg.api_key_env = api_key_env;
+        }
+        if let Some(model) = extract_string_value(raw, "mt_model") {
+            cfg.model = model;
+        }
+        cfg.target_language = extract_string_value(raw, "mt_target_language")
+            .unwrap_or_else(|| engine_config.target_language.clone());
+        Some(cfg)
+    }
+}
+
+impl TtsConfig {
+    pub fn from_json_lossy(raw: &str, _engine_config: &EngineConfig) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "tts_enabled").unwrap_or(false);
+        let mentions_tts = raw.contains("\"tts_") || raw.contains("tts_model_id")
+            || raw.contains("tts_model_dir");
+        if !enabled && !mentions_tts {
+            return None;
+        }
+
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(model_id) = extract_string_value(raw, "tts_model_id") {
+            cfg.model_id = model_id;
+        }
+        if let Some(model_dir) = extract_string_value(raw, "tts_model_dir") {
+            cfg.model_dir = std::path::PathBuf::from(expand_tilde(&model_dir));
+        }
+        if let Some(sid) = extract_f32_value(raw, "tts_speaker_id") {
+            cfg.speaker_id = sid as i32;
+        }
+        if let Some(speed) = extract_f32_value(raw, "tts_speed") {
+            cfg.speed = speed;
+        }
+        Some(cfg)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalMtConfig {
+    pub enabled: bool,
+    /// Model identifier, e.g. "opus-mt-zh-en", "nllb-200-distilled-600M"
+    pub model_id: String,
+    /// Directory containing model files (encoder_model.onnx, tokenizer.json, …)
+    pub model_dir: std::path::PathBuf,
+    /// Source language ISO 639-1 code ("zh", "ja", "auto")
+    pub source_lang: String,
+    /// Target language ISO 639-1 code ("en", "zh")
+    pub target_lang: String,
+}
+
+impl Default for LocalMtConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: "opus-mt-zh-en".to_string(),
+            model_dir: std::path::PathBuf::from(""),
+            source_lang: "auto".to_string(),
+            target_lang: "en".to_string(),
+        }
+    }
+}
+
+impl LocalMtConfig {
+    pub fn from_json_lossy(raw: &str, engine_config: &EngineConfig) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "local_mt_enabled").unwrap_or(false);
+        let mentions = raw.contains("local_mt_");
+        if !enabled && !mentions {
+            return None;
+        }
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(model_id) = extract_string_value(raw, "local_mt_model_id") {
+            cfg.model_id = model_id;
+        }
+        if let Some(model_dir) = extract_string_value(raw, "local_mt_model_dir") {
+            cfg.model_dir = std::path::PathBuf::from(expand_tilde(&model_dir));
+        }
+        cfg.source_lang = extract_string_value(raw, "local_mt_source_lang")
+            .unwrap_or_else(|| engine_config.source_language.clone());
+        cfg.target_lang = extract_string_value(raw, "local_mt_target_lang")
+            .unwrap_or_else(|| engine_config.target_language.clone());
+        Some(cfg)
+    }
+}
+
+fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::Path::new(&home).join(rest).to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
 }
 
 fn extract_f32_value(raw: &str, key: &str) -> Option<f32> {
@@ -381,5 +622,27 @@ mod tests {
     fn eleven_labs_provider_parsed_from_json() {
         let config = EngineConfig::from_json_lossy(r#"{"translation_provider":"eleven_labs"}"#);
         assert_eq!(config.translation_provider, TranslationProvider::ElevenLabs);
+    }
+
+    #[test]
+    fn local_stt_parsed_from_json() {
+        let config = EngineConfig::from_json_lossy(
+            r#"{"local_stt_enabled":true,"local_stt_model_id":"paraformer-zh","local_stt_vad_threshold":0.4}"#,
+        );
+        let stt = config.local_stt.expect("local_stt should parse");
+        assert!(stt.enabled);
+        assert_eq!(stt.model_id, "paraformer-zh");
+        assert!((stt.vad_threshold - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mt_parsed_from_json() {
+        let config = EngineConfig::from_json_lossy(
+            r#"{"mt_enabled":true,"mt_model":"qwen2.5-7b","mt_endpoint":"http://localhost:8080/v1/chat/completions"}"#,
+        );
+        let mt = config.mt.expect("mt should parse");
+        assert!(mt.enabled);
+        assert_eq!(mt.model, "qwen2.5-7b");
+        assert_eq!(mt.endpoint, "http://localhost:8080/v1/chat/completions");
     }
 }

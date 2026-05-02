@@ -1,4 +1,5 @@
 pub mod azure_voice_live;
+pub mod caption_pipeline;
 pub mod openai_realtime;
 
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use metrics::EngineMetrics;
 use output_bridge::{SharedBufferSnapshot, SharedOutputBuffer};
 
 pub use azure_voice_live::{AzureVoiceLiveBridge, AzureVoiceLivePlan, AzureVoiceLiveRuntimeState};
+pub use caption_pipeline::{AudioChunk, CaptionPipeline};
 pub use openai_realtime::{OpenAIRealtimeBridge, OpenAIRealtimePlan, OpenAIRealtimeRuntimeState};
 
 pub struct EngineSession {
@@ -19,6 +21,7 @@ pub struct EngineSession {
     shared_output: Option<Arc<SharedOutputBuffer>>,
     azure_voice_live: Option<AzureVoiceLiveBridge>,
     openai_realtime: Option<OpenAIRealtimeBridge>,
+    caption_pipeline: Option<CaptionPipeline>,
     running: bool,
 }
 
@@ -43,12 +46,14 @@ impl EngineSession {
             shared_output: None,
             azure_voice_live: None,
             openai_realtime: None,
+            caption_pipeline: None,
             running: false,
         }
     }
 
     pub fn start(&mut self) -> Result<()> {
         self.sync_translation_bridge()?;
+        self.sync_caption_pipeline()?;
         self.running = true;
         Ok(())
     }
@@ -57,6 +62,10 @@ impl EngineSession {
         self.running = false;
         self.azure_voice_live = None;
         self.openai_realtime = None;
+        if let Some(pipeline) = self.caption_pipeline.as_mut() {
+            let _ = pipeline.flush();
+        }
+        self.caption_pipeline = None;
     }
 
     pub fn set_target_language(&mut self, lang: &str) {
@@ -67,6 +76,7 @@ impl EngineSession {
         self.config.mode = mode;
         if self.running {
             let _ = self.sync_translation_bridge();
+            let _ = self.sync_caption_pipeline();
         }
     }
 
@@ -145,7 +155,29 @@ impl EngineSession {
                 }
                 // ElevenLabs: audio is accumulated on the Swift side; nothing to do here.
             }
-            EngineMode::CaptionOnly | EngineMode::MuteOnFailure => {}
+            EngineMode::CaptionOnly => {
+                if let Some(pipeline) = self.caption_pipeline.as_mut() {
+                    eprintln!("[session-core] push_input_pcm: samples={} ch={} sr={}",
+                        frame.data.len(), frame.channels, frame.sample_rate);
+                    pipeline.push_pcm(
+                        &frame.data,
+                        frame.channels,
+                        frame.sample_rate,
+                        timestamp_ns,
+                    )?;
+                    // Drain TTS audio synthesized by the worker and route to virtual mic.
+                    let mut audio_chunks = Vec::new();
+                    while let Some(chunk) = pipeline.take_next_audio() {
+                        audio_chunks.push(chunk);
+                    }
+                    for chunk in audio_chunks {
+                        self.push_translated_output_at_rate(chunk.samples, chunk.sample_rate, chunk.timestamp_ns)?;
+                    }
+                } else {
+                    eprintln!("[session-core] push_input_pcm: no caption pipeline active");
+                }
+            }
+            EngineMode::MuteOnFailure => {}
         }
 
         Ok(())
@@ -263,6 +295,39 @@ impl EngineSession {
         Ok(output_frame.frames())
     }
 
+    pub fn push_translated_output_at_rate(
+        &mut self,
+        samples: Vec<f32>,
+        src_rate: u32,
+        timestamp_ns: u64,
+    ) -> Result<usize> {
+        let output_data = if self.config.output_sample_rate == src_rate {
+            samples
+        } else {
+            resample_interleaved_linear(
+                &samples,
+                samples.len(),
+                1,
+                src_rate,
+                self.config.output_sample_rate,
+            )
+        };
+        let output_frame = AudioFrame {
+            timestamp_ns,
+            sample_rate: self.config.output_sample_rate,
+            channels: 1,
+            data: output_data,
+        };
+        let dropped = self.output_ring.push_frame(&output_frame)?;
+        if dropped > 0 {
+            self.metrics.record_overflow();
+        }
+        if let Some(shared_output) = &self.shared_output {
+            shared_output.write_frame(&output_frame)?;
+        }
+        Ok(output_frame.frames())
+    }
+
     pub fn azure_voice_live_state(&self) -> Option<&AzureVoiceLiveRuntimeState> {
         self.azure_voice_live
             .as_ref()
@@ -293,6 +358,69 @@ impl EngineSession {
             TranslationProvider::ElevenLabs | TranslationProvider::None => {}
         }
         Ok(())
+    }
+
+    fn sync_caption_pipeline(&mut self) -> Result<()> {
+        if self.config.mode != EngineMode::CaptionOnly {
+            self.caption_pipeline = None;
+            return Ok(());
+        }
+        let stt = match &self.config.local_stt {
+            Some(cfg) if cfg.enabled => cfg.clone(),
+            _ => {
+                self.caption_pipeline = None;
+                eprintln!("[session-core] caption pipeline skipped: local_stt not enabled or missing");
+                return Ok(());
+            }
+        };
+        let mt = self.config.mt.clone();
+        let tts = self.config.tts.clone();
+        let local_mt = self.config.local_mt.clone();
+        eprintln!("[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
+            stt.model_id, stt.model_dir, stt.vad_model_path);
+        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref()) {
+            Ok(pipeline) => {
+                eprintln!("[session-core] caption pipeline ready");
+                self.caption_pipeline = Some(pipeline);
+            }
+            Err(e) => {
+                eprintln!("[session-core] caption pipeline build failed: {}", e);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn take_next_caption_event(&mut self) -> Result<Option<String>> {
+        match self.caption_pipeline.as_mut() {
+            Some(pipeline) => Ok(pipeline.take_next_event()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn caption_state_json(&self) -> String {
+        let active = self.caption_pipeline.is_some();
+        let last_ns = self
+            .caption_pipeline
+            .as_ref()
+            .map(|p| p.last_event_at_ns())
+            .unwrap_or(0);
+        let model = self
+            .config
+            .local_stt
+            .as_ref()
+            .map(|c| c.model_id.as_str())
+            .unwrap_or("");
+        let mt_enabled = self
+            .config
+            .mt
+            .as_ref()
+            .map(|m| m.enabled)
+            .unwrap_or(false);
+        format!(
+            "{{\"active\":{},\"model\":\"{}\",\"mt_enabled\":{},\"last_event_ns\":{}}}",
+            active, model, mt_enabled, last_ns
+        )
     }
 
     fn output_frame_from_input(&self, frame: &AudioFrame) -> AudioFrame {

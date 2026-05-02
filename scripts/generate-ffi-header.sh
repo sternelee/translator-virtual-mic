@@ -66,9 +66,25 @@ int32_t engine_read_shared_output_pcm(
     uint64_t *out_timestamp_ns
 );
 
+int32_t engine_take_next_translation_event(
+    EngineHandle *handle,
+    char *out_json,
+    int32_t max_len
+);
+
+int32_t engine_ingest_translation_event(EngineHandle *handle, const char *event_json);
+
+int32_t engine_take_next_caption_event(
+    EngineHandle *handle,
+    char *out_json,
+    int32_t max_len
+);
+
 const char *engine_get_last_error(EngineHandle *handle);
 const char *engine_get_metrics_json(EngineHandle *handle);
 const char *engine_get_shared_output_path(EngineHandle *handle);
+const char *engine_get_translation_state_json(EngineHandle *handle);
+const char *engine_get_caption_state_json(EngineHandle *handle);
 
 #ifdef __cplusplus
 }

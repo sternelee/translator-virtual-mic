@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import CoreAudio
 import Foundation
 
@@ -27,6 +28,7 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
     case openAIRealtime = "openai_realtime"
     case azureVoiceLive = "azure_voice_live"
     case elevenLabs = "eleven_labs"
+    case localCaption = "local_caption"
 
     var id: String { rawValue }
 
@@ -40,6 +42,8 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
             "Azure Voice Live"
         case .elevenLabs:
             "ElevenLabs"
+        case .localCaption:
+            "Local Caption"
         }
     }
 }
@@ -61,12 +65,19 @@ final class AppViewModel: ObservableObject {
     @Published var sharedOutputPath: String = ""
     @Published var sharedBufferStatusText: String = "Shared buffer idle"
     @Published var translationStateJSON: String = "{}"
+    @Published var currentCaption: String = ""
+    @Published var captionStateJSON: String = "{}"
+    @Published var selectedLocalSttModelId: String = "paraformer-zh"
+    @Published var localSttModelDownloadState: DownloadState = .idle
 
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
     private let openAIRealtimeService = OpenAIRealtimeService()
     private let elevenLabsPipelineService = ElevenLabsPipelineService()
+    private let captionService = CaptionService()
+    private let modelDownloadService = ModelDownloadService()
     private var engine: EngineBox?
+    private var downloadCancellable: AnyCancellable?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
 
@@ -129,8 +140,13 @@ final class AppViewModel: ObservableObject {
             return
         }
 
+        let engineMode: EngineMode = switch selectedTranslationProvider {
+        case .none: .bypass
+        case .localCaption: .captionOnly
+        default: .translate
+        }
         _ = engine.setTargetLanguage(targetLanguage)
-        _ = engine.setMode(selectedTranslationProvider == .none ? .bypass : .translate)
+        _ = engine.setMode(engineMode)
         let sharedResult = engine.enableSharedOutput(capacityFrames: 14_400, channels: 1, sampleRate: 48_000)
         appendLog("enableSharedOutput result: \(sharedResult)")
         if sharedResult != 0 {
@@ -189,11 +205,18 @@ final class AppViewModel: ObservableObject {
         statusText = "Listening"
         metricsJSON = engine.metricsJSON()
         translationStateJSON = engine.translationStateJSON()
+        currentCaption = ""
+        captionStateJSON = "{}"
         appendLog("Engine started")
         if !sharedOutputPath.isEmpty {
             appendLog("Shared output file: \(sharedOutputPath)")
         }
-        startTranslationService(using: engine)
+        if selectedTranslationProvider == .localCaption {
+            captionService.start(engine: engine)
+            appendLog("Local caption service started")
+        } else {
+            startTranslationService(using: engine)
+        }
         startSharedBufferMonitor()
     }
 
@@ -202,6 +225,7 @@ final class AppViewModel: ObservableObject {
         azureVoiceLiveService.stop()
         openAIRealtimeService.stop()
         elevenLabsPipelineService.stop()
+        captionService.stop()
         stopSharedBufferMonitor()
         guard let engine else { return }
         _ = engine.stop()
@@ -211,6 +235,8 @@ final class AppViewModel: ObservableObject {
         sharedOutputPath = ""
         sharedBufferStatusText = "Shared buffer idle"
         translationStateJSON = "{}"
+        currentCaption = ""
+        captionStateJSON = "{}"
         lastSharedBufferSnapshot = .missing
         appendLog("Engine stopped")
     }
@@ -226,6 +252,12 @@ final class AppViewModel: ObservableObject {
             "en-US"
         }
 
+        let mode: String = switch selectedTranslationProvider {
+        case .none: "bypass"
+        case .localCaption: "caption_only"
+        default: "translate"
+        }
+
         let azureEndpoint = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_ENDPOINT"] ?? ""
         let azureModel = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_MODEL"] ?? "gpt-realtime"
         let azureVoiceName = ProcessInfo.processInfo.environment["AZURE_VOICELIVE_VOICE_NAME"]
@@ -233,9 +265,8 @@ final class AppViewModel: ObservableObject {
         let openAIEndpoint = ProcessInfo.processInfo.environment["OPENAI_REALTIME_ENDPOINT"] ?? "wss://api.openai.com/v1/realtime"
         let openAIModel = ProcessInfo.processInfo.environment["OPENAI_REALTIME_MODEL"] ?? "gpt-realtime"
         let openAIVoiceName = ProcessInfo.processInfo.environment["OPENAI_REALTIME_VOICE_NAME"] ?? "marin"
-        let mode = selectedTranslationProvider == .none ? "bypass" : "translate"
 
-        return String(
+        var base = String(
             format: #"{"target":"%@","mode":"%@","translation_provider":"%@","azure_voice_live_endpoint":"%@","azure_voice_live_model":"%@","azure_voice_live_api_key_env":"AZURE_VOICELIVE_API_KEY","azure_voice_live_voice_name":"%@","azure_voice_live_source_locale":"%@","azure_voice_live_target_locale":"%@","openai_realtime_endpoint":"%@","openai_realtime_model":"%@","openai_realtime_api_key_env":"OPENAI_API_KEY","openai_realtime_voice_name":"%@","openai_realtime_source_locale":"%@","openai_realtime_target_locale":"%@","input_gain_db":%.2f,"limiter_threshold_db":%.2f}"#,
             targetLanguage,
             mode,
@@ -253,11 +284,39 @@ final class AppViewModel: ObservableObject {
             inputGainDB,
             limiterThresholdDB
         )
+
+        if selectedTranslationProvider == .localCaption {
+            let env = ProcessInfo.processInfo.environment
+            let modelId = env["LOCAL_STT_MODEL_ID"] ?? selectedLocalSttModelId
+            let defaultModelDir = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first?
+                .appendingPathComponent("translator-virtual-mic/models")
+                .path ?? ""
+            let modelDir = env["LOCAL_STT_MODEL_DIR"] ?? defaultModelDir
+            let vadPath = env["LOCAL_STT_VAD_MODEL_PATH"] ?? (modelDir as NSString).appendingPathComponent("silero_vad.onnx")
+            let vadThreshold = env["LOCAL_STT_VAD_THRESHOLD"] ?? "0.5"
+            let sttLanguage = env["LOCAL_STT_LANGUAGE"] ?? "zh"
+            let mtEnabled = env["MT_ENABLED"] ?? "false"
+            let mtEndpoint = env["MT_ENDPOINT"] ?? "https://api.openai.com/v1/chat/completions"
+            let mtApiKey = env["MT_API_KEY"] ?? ""
+            let mtApiKeyEnv = env["MT_API_KEY_ENV"] ?? "OPENAI_API_KEY"
+            let mtModel = env["MT_MODEL"] ?? "gpt-4o-mini"
+            let mtTarget = targetLanguage
+
+            // Append local_stt and mt keys by slicing before the final "}"
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)"}"#
+            if let idx = base.lastIndex(of: "}") {
+                base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
+            }
+        }
+
+        return base
     }
 
     private func startTranslationService(using engine: EngineBox) {
         switch selectedTranslationProvider {
-        case .none:
+        case .none, .localCaption:
             return
         case .azureVoiceLive:
             startAzureVoiceLive(using: engine)
@@ -412,6 +471,50 @@ final class AppViewModel: ObservableObject {
         return data[range].withUnsafeBytes { rawBuffer in
             UInt64(littleEndian: rawBuffer.load(as: UInt64.self))
         }
+    }
+
+    // MARK: - Local STT Model Management
+
+    func isModelDownloaded(_ modelId: String) -> Bool {
+        guard let model = ModelRegistry.model(for: modelId) else { return false }
+        return modelDownloadService.isModelDownloaded(model)
+    }
+
+    func isVADModelDownloaded() -> Bool {
+        return modelDownloadService.isModelDownloaded(ModelRegistry.vadModel)
+    }
+
+    func downloadModel(_ modelId: String) {
+        guard let model = ModelRegistry.model(for: modelId) else { return }
+        localSttModelDownloadState = .idle
+        downloadCancellable = modelDownloadService.$state
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.localSttModelDownloadState = state
+                if case .completed = state {
+                    self?.appendLog("Model \(modelId) downloaded")
+                } else if case .failed(let msg) = state {
+                    self?.appendLog("Model download failed: \(msg)")
+                }
+            }
+        modelDownloadService.startDownload(model)
+    }
+
+    func downloadVADModel() {
+        downloadModel(ModelRegistry.vadModel.id)
+    }
+
+    func cancelModelDownload() {
+        modelDownloadService.cancel()
+        downloadCancellable?.cancel()
+        downloadCancellable = nil
+        localSttModelDownloadState = .idle
+    }
+
+    func deleteModel(_ modelId: String) {
+        guard let model = ModelRegistry.model(for: modelId) else { return }
+        modelDownloadService.deleteModel(model)
+        appendLog("Deleted model \(modelId)")
     }
 
     private func appendLog(_ message: String) {

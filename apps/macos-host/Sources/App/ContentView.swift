@@ -49,6 +49,66 @@ struct ContentView: View {
                     }
                 }
 
+                if viewModel.selectedTranslationProvider == .localCaption {
+                    Section("Local STT Model") {
+                        Picker("Model", selection: $viewModel.selectedLocalSttModelId) {
+                            ForEach(ModelRegistry.allModels) { model in
+                                let downloaded = viewModel.isModelDownloaded(model.id)
+                                Text("\(model.displayName) \(downloaded ? "✓" : "")").tag(model.id)
+                            }
+                        }
+                        if let model = ModelRegistry.model(for: viewModel.selectedLocalSttModelId) {
+                            Text(model.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("Size: \(model.sizeDisplay)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                if viewModel.isModelDownloaded(model.id) {
+                                    Button("Delete") {
+                                        viewModel.deleteModel(model.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.red)
+                                } else {
+                                    Button("Download") {
+                                        viewModel.downloadModel(model.id)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(viewModel.localSttModelDownloadState != .idle)
+                                }
+                                Spacer()
+                            }
+                            if case .downloading(let progress) = viewModel.localSttModelDownloadState,
+                               progress.modelId == model.id {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
+                                    Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
+                                        .font(.caption2)
+                                }
+                            }
+                        }
+                        if !viewModel.isVADModelDownloaded() {
+                            HStack {
+                                Text("Silero VAD model missing")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                Spacer()
+                                Button("Download VAD") {
+                                    viewModel.downloadVADModel()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(viewModel.localSttModelDownloadState != .idle)
+                            }
+                        } else {
+                            Text("Silero VAD model ready")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+
                 Section("Input Devices") {
                     ForEach(viewModel.devices) { device in
                         HStack {
@@ -79,6 +139,14 @@ struct ContentView: View {
                         .textSelection(.enabled)
                 }
                 Text(viewModel.sharedBufferStatusText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                if !viewModel.currentCaption.isEmpty {
+                    Text(viewModel.currentCaption)
+                        .font(.title2)
+                        .textSelection(.enabled)
+                }
+                Text(viewModel.captionStateJSON)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
                 Text(viewModel.translationStateJSON)
