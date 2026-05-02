@@ -30,6 +30,7 @@ struct ContentView: View {
                     .onChange(of: viewModel.selectedTranslationProvider) { _, newValue in
                         if newValue == .localCaption {
                             viewModel.localMtEnabled = true
+                            viewModel.ttsEnabled = true
                         }
                     }
                     Picker("Target Language", selection: $viewModel.targetLanguage) {
@@ -178,6 +179,63 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
+                    }
+                }
+
+                if viewModel.selectedTranslationProvider == .localCaption {
+                    Section("Local TTS") {
+                        Picker("TTS Model", selection: $viewModel.selectedTtsModelId) {
+                            ForEach(TtsModelRegistry.allModels) { model in
+                                let downloaded = viewModel.isTtsModelDownloaded(model.id)
+                                Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
+                            }
+                        }
+                        if let model = TtsModelRegistry.model(for: viewModel.selectedTtsModelId) {
+                            Text(model.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("Size: \(model.sizeDisplay)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                if viewModel.isTtsModelDownloaded(model.id) {
+                                    Button("Delete") {
+                                        viewModel.deleteTtsModel(model.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.red)
+                                } else {
+                                    Button("Download") {
+                                        viewModel.downloadTtsModel(model.id)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(viewModel.ttsModelDownloadState != .idle)
+                                }
+                                Spacer()
+                            }
+                            if case .downloading(let progress) = viewModel.ttsModelDownloadState,
+                               progress.modelId == model.id {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
+                                    Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
+                                        .font(.caption2)
+                                }
+                            }
+                        }
+
+                        Toggle("Use local TTS", isOn: $viewModel.ttsEnabled)
+                            .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Speed")
+                                Spacer()
+                                Text(String(format: "%.1fx", viewModel.ttsSpeed))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $viewModel.ttsSpeed, in: 0.5...2.0, step: 0.1)
+                        }
+                        .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
                     }
                 }
 
