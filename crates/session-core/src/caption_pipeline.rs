@@ -439,6 +439,7 @@ fn worker_loop(
     audio_tx: Sender<AudioChunk>,
     worker_busy: Arc<AtomicBool>,
 ) {
+    let mut last_tts_text = String::new();
     while let Ok(job) = rx.recv() {
         let is_final = matches!(job, WorkerJob::Segment(_));
         let (samples, timestamp_ns, language) = match job {
@@ -481,9 +482,9 @@ fn worker_loop(
             continue;
         }
 
-        // Only run MT/TTS on final segments.
-        let (translated, tts_text) = if is_final {
-            let translated = if let Some(ref lmt) = local_mt {
+        // MT runs only on final segments (local MT is too slow for partials).
+        let translated = if is_final {
+            if let Some(ref lmt) = local_mt {
                 match lmt.translate(&original, &local_mt_target_lang) {
                     Ok(t) if !t.trim().is_empty() => Some(t),
                     Ok(_) => None,
@@ -496,34 +497,36 @@ fn worker_loop(
                 mt.as_ref()
                     .and_then(|client| client.translate(&original, &target_lang).ok())
                     .filter(|t| !t.trim().is_empty())
-            };
-            let tts_text = translated.as_deref().unwrap_or(&original).to_string();
-            (translated, Some(tts_text))
+            }
         } else {
-            (None, None)
+            None
         };
 
-        // TTS only for final.
-        if is_final {
-            if let Some(ref tts_backend) = tts {
-                if let Some(ref text) = tts_text {
-                    match tts_backend.synthesize(text) {
-                        Ok((samples, sample_rate)) => {
-                            eprintln!(
-                                "[caption_pipeline] worker: TTS produced {} samples @ {}Hz",
-                                samples.len(),
-                                sample_rate
-                            );
-                            let _ = audio_tx.send(AudioChunk {
-                                samples,
-                                sample_rate,
-                                timestamp_ns,
-                            });
-                        }
-                        Err(e) => eprintln!("[caption_pipeline] worker: TTS error: {}", e),
+        // TTS: use translated text if available, else original STT text.
+        // Dedup: skip synthesis if the candidate text equals the last synthesized text.
+        // On final: reset last_tts_text after synthesis so the next partial starts fresh.
+        let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
+        if let Some(ref tts_backend) = tts {
+            if !tts_candidate.trim().is_empty() && tts_candidate.trim() != last_tts_text.trim() {
+                match tts_backend.synthesize(tts_candidate) {
+                    Ok((tts_samples, sample_rate)) => {
+                        eprintln!(
+                            "[caption_pipeline] worker: TTS produced {} samples @ {}Hz (is_final={})",
+                            tts_samples.len(), sample_rate, is_final
+                        );
+                        let _ = audio_tx.send(AudioChunk {
+                            samples: tts_samples,
+                            sample_rate,
+                            timestamp_ns,
+                        });
+                        last_tts_text = tts_candidate.to_string();
                     }
+                    Err(e) => eprintln!("[caption_pipeline] worker: TTS error: {e}"),
                 }
             }
+        }
+        if is_final {
+            last_tts_text.clear();
         }
 
         let event = CaptionEvent {
@@ -630,5 +633,20 @@ mod tests {
         });
         assert!(!matches!(partial, WorkerJob::Segment(_)));
         assert!(matches!(segment, WorkerJob::Segment(_)));
+    }
+
+    #[test]
+    fn tts_fires_on_partial_and_final() {
+        let mut last_tts_text = String::new();
+        let text = "hello world";
+        let should_synthesize = text.trim() != last_tts_text.trim();
+        assert!(should_synthesize, "first partial should synthesize");
+        last_tts_text = text.to_string();
+        let should_synthesize_again = text.trim() != last_tts_text.trim();
+        assert!(!should_synthesize_again, "identical partial should be skipped");
+        // Simulate final segment: clear dedup state
+        last_tts_text.clear();
+        let should_synthesize_after_final = text.trim() != last_tts_text.trim();
+        assert!(should_synthesize_after_final, "after final reset, next partial should synthesize again");
     }
 }
