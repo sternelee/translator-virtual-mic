@@ -7,9 +7,7 @@ pub fn paraformer_model_paths(model_dir: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
-pub fn moonshine_model_paths(
-    model_dir: &Path,
-) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
+pub fn moonshine_model_paths(model_dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
     (
         model_dir.join("preprocess.onnx"),
         model_dir.join("encode.int8.onnx"),

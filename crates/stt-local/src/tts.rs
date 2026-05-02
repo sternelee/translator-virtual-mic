@@ -23,8 +23,8 @@
 use std::path::Path;
 
 use sherpa_onnx::{
-    OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig, OfflineTtsModelConfig,
-    OfflineTtsVitsModelConfig, GenerationConfig,
+    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
+    OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
 };
 
 use crate::{Result, SttError};
@@ -48,12 +48,7 @@ impl TtsBackend {
     /// Load a TTS backend from files under `model_dir/<model_id>/`.
     ///
     /// `model_id` must start with `"kokoro-"` or `"vits-"`.
-    pub fn new(
-        model_id: &str,
-        model_dir: &Path,
-        speaker_id: i32,
-        speed: f32,
-    ) -> Result<Self> {
+    pub fn new(model_id: &str, model_dir: &Path, speaker_id: i32, speed: f32) -> Result<Self> {
         eprintln!("[tts] loading model_id={model_id} model_dir={model_dir:?}");
         let dir = model_dir.join(model_id);
 
@@ -82,8 +77,12 @@ impl TtsBackend {
 
     /// Synthesise `text` and return `(samples_f32, sample_rate)`.
     pub fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
-        eprintln!("[tts] synthesize: sid={} speed={} text='{}'",
-            self.speaker_id, self.speed, &text[..text.len().min(60)]);
+        eprintln!(
+            "[tts] synthesize: sid={} speed={} text='{}'",
+            self.speaker_id,
+            self.speed,
+            &text[..text.len().min(60)]
+        );
 
         let gen_cfg = GenerationConfig {
             sid: self.speaker_id,
@@ -98,7 +97,11 @@ impl TtsBackend {
 
         let samples = audio.samples().to_vec();
         let sample_rate = audio.sample_rate() as u32;
-        eprintln!("[tts] synthesized {} samples @ {}Hz", samples.len(), sample_rate);
+        eprintln!(
+            "[tts] synthesized {} samples @ {}Hz",
+            samples.len(),
+            sample_rate
+        );
         Ok((samples, sample_rate))
     }
 
@@ -133,20 +136,28 @@ fn require_file(dir: &Path, name: &str) -> Result<String> {
     if p.exists() {
         Ok(p.to_string_lossy().into_owned())
     } else {
-        Err(SttError::Model(format!("TTS file not found: {}", p.display())))
+        Err(SttError::Model(format!(
+            "TTS file not found: {}",
+            p.display()
+        )))
     }
 }
 
 fn build_kokoro_config(dir: &Path) -> Result<OfflineTtsConfig> {
-    let model = best_onnx(dir, "model")
-        .ok_or_else(|| SttError::Model(format!("kokoro model.onnx not found in {}", dir.display())))?;
+    let model = best_onnx(dir, "model").ok_or_else(|| {
+        SttError::Model(format!("kokoro model.onnx not found in {}", dir.display()))
+    })?;
     let voices = require_file(dir, "voices.bin")?;
     let tokens = require_file(dir, "tokens.txt")?;
 
     // Optional data_dir (for Chinese text normalisation)
     let data_dir = {
         let d = dir.join("espeak-ng-data");
-        if d.exists() { Some(d.to_string_lossy().into_owned()) } else { None }
+        if d.exists() {
+            Some(d.to_string_lossy().into_owned())
+        } else {
+            None
+        }
     };
 
     Ok(OfflineTtsConfig {
@@ -167,17 +178,26 @@ fn build_kokoro_config(dir: &Path) -> Result<OfflineTtsConfig> {
 }
 
 fn build_vits_config(dir: &Path) -> Result<OfflineTtsConfig> {
-    let model = best_onnx(dir, "model")
-        .ok_or_else(|| SttError::Model(format!("vits model.onnx not found in {}", dir.display())))?;
+    let model = best_onnx(dir, "model").ok_or_else(|| {
+        SttError::Model(format!("vits model.onnx not found in {}", dir.display()))
+    })?;
     let tokens = require_file(dir, "tokens.txt")?;
 
     let lexicon = {
         let lx = dir.join("lexicon.txt");
-        if lx.exists() { Some(lx.to_string_lossy().into_owned()) } else { None }
+        if lx.exists() {
+            Some(lx.to_string_lossy().into_owned())
+        } else {
+            None
+        }
     };
     let data_dir = {
         let d = dir.join("espeak-ng-data");
-        if d.exists() { Some(d.to_string_lossy().into_owned()) } else { None }
+        if d.exists() {
+            Some(d.to_string_lossy().into_owned())
+        } else {
+            None
+        }
     };
 
     Ok(OfflineTtsConfig {

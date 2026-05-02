@@ -59,6 +59,11 @@ model_dir = "~/Library/Application Support/translator-virtual-mic/models"
 vad_model_path = "~/Library/Application Support/translator-virtual-mic/models/silero_vad.onnx"
 vad_threshold = 0.5
 language = "zh"
+# Streaming partial caption tuning
+partial_interval_ms = 500
+max_partial_window_seconds = 5.0
+overlap_tail_ms = 300
+skip_partial_if_busy = true
 
 [mt]
 enabled = false

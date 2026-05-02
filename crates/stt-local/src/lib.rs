@@ -82,7 +82,10 @@ impl Default for ManagedTranscriber {
 /// Build a backend instance for the given model id, expecting model files to
 /// already exist under `models_root/<model_id>/`.
 pub fn load_backend(model_id: &str, models_root: &Path) -> Result<Box<dyn TranscriberBackend>> {
-    eprintln!("[stt-local] load_backend: model_id={} models_root={:?}", model_id, models_root);
+    eprintln!(
+        "[stt-local] load_backend: model_id={} models_root={:?}",
+        model_id, models_root
+    );
     let info = registry::get_model(model_id)
         .ok_or_else(|| SttError::Model(format!("unknown model id: {model_id}")))?;
     let model_dir = models_root.join(model_id);
@@ -91,7 +94,10 @@ pub fn load_backend(model_id: &str, models_root: &Path) -> Result<Box<dyn Transc
     match info.backend {
         BackendKind::Paraformer => {
             let (onnx, tokens) = manager::paraformer_model_paths(&model_dir);
-            eprintln!("[stt-local] paraformer paths: onnx={:?} tokens={:?}", onnx, tokens);
+            eprintln!(
+                "[stt-local] paraformer paths: onnx={:?} tokens={:?}",
+                onnx, tokens
+            );
             let backend = paraformer::ParaformerBackend::new(&onnx, &tokens, model_id)?;
             eprintln!("[stt-local] paraformer backend created");
             Ok(Box::new(backend))
@@ -99,7 +105,10 @@ pub fn load_backend(model_id: &str, models_root: &Path) -> Result<Box<dyn Transc
         BackendKind::Moonshine => {
             let (preprocessor, encoder, uncached_decoder, cached_decoder, tokens) =
                 manager::moonshine_model_paths(&model_dir);
-            eprintln!("[stt-local] moonshine paths: preprocess={:?} encode={:?} tokens={:?}", preprocessor, encoder, tokens);
+            eprintln!(
+                "[stt-local] moonshine paths: preprocess={:?} encode={:?} tokens={:?}",
+                preprocessor, encoder, tokens
+            );
             let backend = moonshine::MoonshineBackend::new(
                 &preprocessor,
                 &encoder,
@@ -113,14 +122,21 @@ pub fn load_backend(model_id: &str, models_root: &Path) -> Result<Box<dyn Transc
         }
         BackendKind::FireRedAsr => {
             let (encoder, decoder, tokens) = manager::fire_red_asr_model_paths(&model_dir);
-            eprintln!("[stt-local] fire_red_asr paths: encoder={:?} decoder={:?} tokens={:?}", encoder, decoder, tokens);
-            let backend = fire_red_asr::FireRedAsrBackend::new(&encoder, &decoder, &tokens, model_id)?;
+            eprintln!(
+                "[stt-local] fire_red_asr paths: encoder={:?} decoder={:?} tokens={:?}",
+                encoder, decoder, tokens
+            );
+            let backend =
+                fire_red_asr::FireRedAsrBackend::new(&encoder, &decoder, &tokens, model_id)?;
             eprintln!("[stt-local] fire_red_asr backend created");
             Ok(Box::new(backend))
         }
         BackendKind::ZipformerCtc => {
             let (onnx, tokens) = manager::zipformer_ctc_model_paths(&model_dir);
-            eprintln!("[stt-local] zipformer_ctc paths: onnx={:?} tokens={:?}", onnx, tokens);
+            eprintln!(
+                "[stt-local] zipformer_ctc paths: onnx={:?} tokens={:?}",
+                onnx, tokens
+            );
             let backend = zipformer_ctc::ZipformerCtcBackend::new(&onnx, &tokens, model_id)?;
             eprintln!("[stt-local] zipformer_ctc backend created");
             Ok(Box::new(backend))

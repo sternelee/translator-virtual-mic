@@ -79,7 +79,11 @@ impl Vad {
         let window_size = config.window_size as usize;
         let inner = VoiceActivityDetector::create(&model_cfg, config.buffer_seconds)
             .ok_or_else(|| SttError::Backend("Failed to create VoiceActivityDetector".into()))?;
-        Ok(Self { inner, window_size, pending: Vec::new() })
+        Ok(Self {
+            inner,
+            window_size,
+            pending: Vec::new(),
+        })
     }
 
     /// Push 16 kHz mono `f32` samples and drain any newly completed speech
@@ -97,9 +101,13 @@ impl Vad {
             windows_processed += 1;
         }
         if windows_processed > 0 {
-            eprintln!("[vad] accept_waveform x{} pending_left={} detected={} empty={}",
-                windows_processed, self.pending.len(),
-                self.inner.detected(), self.inner.is_empty());
+            eprintln!(
+                "[vad] accept_waveform x{} pending_left={} detected={} empty={}",
+                windows_processed,
+                self.pending.len(),
+                self.inner.detected(),
+                self.inner.is_empty()
+            );
         }
         self.drain()
     }

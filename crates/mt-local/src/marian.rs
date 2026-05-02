@@ -4,11 +4,11 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ndarray::{Array2, ArrayD, IxDyn};
-use ort::{session::Session, value::Tensor, inputs};
+use ort::{inputs, session::Session, value::Tensor};
 use tokenizers::Tokenizer;
 
+use crate::registry::{get_model, iso_to_nllb, MtModelFamily};
 use crate::{MtLocalError, Result};
-use crate::registry::{MtModelFamily, get_model, iso_to_nllb};
 
 const DEFAULT_MAX_LENGTH: usize = 256;
 
@@ -257,7 +257,11 @@ impl crate::LocalMtBackend for MarianBackend {
         if text.is_empty() {
             return Ok(String::new());
         }
-        eprintln!("[mt-local] translate: len={} src={} tgt={target_lang}", text.len(), self.src_lang);
+        eprintln!(
+            "[mt-local] translate: len={} src={} tgt={target_lang}",
+            text.len(),
+            self.src_lang
+        );
 
         let (input_ids, _seq_len) = self.encode_text(text)?;
         let encoder_hidden = self.run_encoder(&input_ids)?;
@@ -265,7 +269,10 @@ impl crate::LocalMtBackend for MarianBackend {
         let output_ids = self.greedy_decode(&encoder_hidden, input_ids.len(), tgt_token_id)?;
         let result = self.decode_ids(&output_ids)?;
 
-        eprintln!("[mt-local] translated: '{}'", &result[..result.len().min(80)]);
+        eprintln!(
+            "[mt-local] translated: '{}'",
+            &result[..result.len().min(80)]
+        );
         Ok(result.trim().to_string())
     }
 

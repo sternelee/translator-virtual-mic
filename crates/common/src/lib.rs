@@ -75,6 +75,10 @@ pub struct LocalSttConfig {
     pub vad_model_path: PathBuf,
     pub vad_threshold: f32,
     pub language: String,
+    pub partial_interval_ms: u64,
+    pub max_partial_window_seconds: f32,
+    pub overlap_tail_ms: u64,
+    pub skip_partial_if_busy: bool,
 }
 
 impl Default for LocalSttConfig {
@@ -86,6 +90,10 @@ impl Default for LocalSttConfig {
             vad_model_path: PathBuf::from(""),
             vad_threshold: 0.5,
             language: "auto".to_string(),
+            partial_interval_ms: 500,
+            max_partial_window_seconds: 5.0,
+            overlap_tail_ms: 300,
+            skip_partial_if_busy: true,
         }
     }
 }
@@ -196,10 +204,14 @@ impl EngineConfig {
         if raw.contains("\"mode\":\"caption_only\"") || raw.contains("mode = \"caption_only\"") {
             config.mode = EngineMode::CaptionOnly;
         }
-        if raw.contains("\"mode\":\"mute_on_failure\"") || raw.contains("mode = \"mute_on_failure\"") {
+        if raw.contains("\"mode\":\"mute_on_failure\"")
+            || raw.contains("mode = \"mute_on_failure\"")
+        {
             config.mode = EngineMode::MuteOnFailure;
         }
-        if raw.contains("\"mode\":\"fallback_to_bypass\"") || raw.contains("mode = \"fallback_to_bypass\"") {
+        if raw.contains("\"mode\":\"fallback_to_bypass\"")
+            || raw.contains("mode = \"fallback_to_bypass\"")
+        {
             config.mode = EngineMode::FallbackToBypass;
         }
         if raw.contains("\"target\":\"zh\"") || raw.contains("target = \"zh\"") {
@@ -345,6 +357,13 @@ impl LocalSttConfig {
         }
         cfg.language = extract_string_value(raw, "local_stt_language")
             .unwrap_or_else(|| engine_config.source_language.clone());
+        cfg.partial_interval_ms =
+            extract_u64_value(raw, "local_stt_partial_interval_ms").unwrap_or(500);
+        cfg.max_partial_window_seconds =
+            extract_f32_value(raw, "local_stt_max_partial_window_seconds").unwrap_or(5.0);
+        cfg.overlap_tail_ms = extract_u64_value(raw, "local_stt_overlap_tail_ms").unwrap_or(300);
+        cfg.skip_partial_if_busy =
+            extract_bool_value(raw, "local_stt_skip_partial_if_busy").unwrap_or(true);
         Some(cfg)
     }
 }
@@ -352,8 +371,10 @@ impl LocalSttConfig {
 impl MtConfig {
     pub fn from_json_lossy(raw: &str, engine_config: &EngineConfig) -> Option<Self> {
         let enabled = extract_bool_value(raw, "mt_enabled").unwrap_or(false);
-        let mentions_mt = raw.contains("\"mt_") || raw.contains("mt_endpoint")
-            || raw.contains("mt_model") || raw.contains("mt_api_key");
+        let mentions_mt = raw.contains("\"mt_")
+            || raw.contains("mt_endpoint")
+            || raw.contains("mt_model")
+            || raw.contains("mt_api_key");
         if !enabled && !mentions_mt {
             return None;
         }
@@ -381,8 +402,8 @@ impl MtConfig {
 impl TtsConfig {
     pub fn from_json_lossy(raw: &str, _engine_config: &EngineConfig) -> Option<Self> {
         let enabled = extract_bool_value(raw, "tts_enabled").unwrap_or(false);
-        let mentions_tts = raw.contains("\"tts_") || raw.contains("tts_model_id")
-            || raw.contains("tts_model_dir");
+        let mentions_tts =
+            raw.contains("\"tts_") || raw.contains("tts_model_id") || raw.contains("tts_model_dir");
         if !enabled && !mentions_tts {
             return None;
         }
@@ -456,7 +477,10 @@ impl LocalMtConfig {
 fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
-            return std::path::Path::new(&home).join(rest).to_string_lossy().into_owned();
+            return std::path::Path::new(&home)
+                .join(rest)
+                .to_string_lossy()
+                .into_owned();
         }
     }
     path.to_string()
@@ -472,6 +496,22 @@ fn extract_f32_value(raw: &str, key: &str) -> Option<f32> {
             .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
             .collect::<String>();
         if let Ok(parsed) = value.parse::<f32>() {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn extract_u64_value(raw: &str, key: &str) -> Option<u64> {
+    let patterns = [format!("\"{key}\":"), format!("{key} = ")];
+    for pattern in patterns {
+        let start = raw.find(&pattern)? + pattern.len();
+        let value = raw[start..]
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(parsed) = value.parse::<u64>() {
             return Some(parsed);
         }
     }

@@ -12,6 +12,9 @@ Core crates under `crates/`:
 - `metrics` — metrics collection and export
 - `common` — config/types shared across crates
 - `demo-cli` — smoke-test binary and `emit_shared_output` utility
+- `stt-local` — local STT/VAD via sherpa-onnx
+- `mt-client` — HTTP MT client (OpenAI-compatible endpoint)
+- `mt-local` — local MT via ONNX runtime
 
 SwiftUI host app: `apps/macos-host/`. Audio Server Plug-in (ObjC++): `native/macos/virtual-mic-plugin/Sources/`. HAL smoke verifier: `native/macos/hal-smoke-verifier/`.
 
@@ -23,7 +26,7 @@ SwiftUI host app: `apps/macos-host/`. Audio Server Plug-in (ObjC++): `native/mac
 cargo check                                         # primary validation
 cargo clippy                                        # pedantic linting (workspace-wide warn)
 cargo build --release
-cargo test
+cargo test                                          # all 13 crates + doc tests
 cargo test -p output-bridge                         # single crate
 cargo test -p output-bridge writes_and_reads_interleaved_pcm  # single test
 cargo run -p demo-cli                               # engine/session smoke test
@@ -118,6 +121,9 @@ Swift (AVFoundation mic) → Rust engine (C ABI) → shared output buffer → Ob
 - `crates/session-core`: central runtime, ring buffers, mode behavior, metrics, shared output wiring
 - `crates/engine-api`: `EngineHandle` lifecycle, C ABI surface
 - `crates/output-bridge`: file-backed shared buffer protocol (writer side)
+- `crates/stt-local`: local STT/VAD via sherpa-onnx (used by caption pipeline)
+- `crates/mt-client`: HTTP MT client for remote translation
+- `crates/mt-local`: local MT via ONNX runtime
 - `native/macos/virtual-mic-plugin/Sources`: ObjC++ plug-in, reader side of shared buffer, HAL property surface
 
 ### Integration Contracts
@@ -134,23 +140,47 @@ Swift (AVFoundation mic) → Rust engine (C ABI) → shared output buffer → Ob
 
 ### Config
 
-`config/default.toml` is the baseline. Provider selection is there (`openai_realtime` or `azure_voice_live`). Env vars for keys:
+`config/default.toml` is the baseline. Provider selection and pipeline config live there. Key sections:
+
+- `[translation]` — `provider = "openai_realtime"` or `"azure_voice_live"`
+- `[openai_realtime]` / `[azure_voice_live]` — cloud realtime provider config
+- `[elevenlabs]` — ElevenLabs pipeline (STT via Scribe, MT via OpenAI-compatible endpoint, TTS via ElevenLabs)
+- `[local_stt]` — local sherpa-onnx STT config (model path, VAD path, language)
+- `[mt]` — remote MT config (OpenAI-compatible chat completions endpoint)
+
+Env vars for keys and overrides:
 
 ```bash
+# OpenAI Realtime
 export OPENAI_API_KEY=...
+export OPENAI_REALTIME_MODEL=gpt-realtime      # optional
+export OPENAI_REALTIME_VOICE_NAME=marin        # optional
+export OPENAI_REALTIME_ENDPOINT=wss://api.openai.com/v1/realtime  # optional
+
+# Azure Voice Live
 export AZURE_VOICELIVE_API_KEY=...
 export AZURE_VOICELIVE_ENDPOINT=...
+
+# ElevenLabs pipeline
+export ELEVENLABS_API_KEY=...
+export ELEVENLABS_VOICE_ID=...
+export ELEVENLABS_MODEL_ID=eleven_multilingual_v2  # optional
+export MT_BASE_URL=https://api.openai.com/v1       # optional
+export MT_MODEL=gpt-4o-mini                        # optional
+export MT_API_KEY_ENV=OPENAI_API_KEY               # optional
 ```
 
-## Current Working Status (2026-04-12)
+## Current Working Status
 
 - Physical mic capture → Rust engine → shared buffer: working
 - HAL plug-in enumerated by CoreAudio: working
 - QuickTime recording through Translator Virtual Mic: **working**
 - Bluetooth headset input (with sample-rate adaptation): working
-- `cargo check`, `cargo test -p common -p session-core -p engine-api`: passing
+- Local caption pipeline (`EngineMode::CaptionOnly`): VAD + streaming partial/final STT + MT + TTS implemented via `caption_pipeline.rs`
+- Cloud translation bridges: `azure_voice_live` and `openai_realtime` exist in `session-core`
+- `cargo check`, `cargo test --workspace`: passing
 
-**Not yet implemented**: VAD, ASR, MT, TTS, Azure Voice Live end-to-end live session, production lock-free buffers, conferencing app validation.
+**Deferred / not production-validated**: end-to-end cloud provider live sessions, production lock-free buffers, conferencing app validation.
 
 ## Debugging Aids
 

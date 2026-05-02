@@ -30,9 +30,8 @@ pub fn resample_once(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Ve
     }
 
     let ratio = f64::from(to_rate) / f64::from(from_rate);
-    let mut resampler =
-        SincFixedIn::<f32>::new(ratio, 2.0, sinc_params(), samples.len(), 1)
-            .map_err(|e| SttError::Audio(format!("resampler init failed: {e}")))?;
+    let mut resampler = SincFixedIn::<f32>::new(ratio, 2.0, sinc_params(), samples.len(), 1)
+        .map_err(|e| SttError::Audio(format!("resampler init failed: {e}")))?;
 
     let wave_in = vec![samples.to_vec()];
     let mut output = resampler

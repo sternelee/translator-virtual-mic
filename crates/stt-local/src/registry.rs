@@ -138,7 +138,8 @@ pub static ALL_MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: "fire-red-asr-v1",
         display_name: "FireRedASR Large v1",
-        description: "Xiaohongshu FireRedASR, AED architecture, very high Chinese accuracy. 1.74 GB.",
+        description:
+            "Xiaohongshu FireRedASR, AED architecture, very high Chinese accuracy. 1.74 GB.",
         backend: BackendKind::FireRedAsr,
         total_size_bytes: 1_735_071_400,
         size_display: "1.74 GB",

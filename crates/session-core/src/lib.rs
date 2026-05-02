@@ -157,8 +157,12 @@ impl EngineSession {
             }
             EngineMode::CaptionOnly => {
                 if let Some(pipeline) = self.caption_pipeline.as_mut() {
-                    eprintln!("[session-core] push_input_pcm: samples={} ch={} sr={}",
-                        frame.data.len(), frame.channels, frame.sample_rate);
+                    eprintln!(
+                        "[session-core] push_input_pcm: samples={} ch={} sr={}",
+                        frame.data.len(),
+                        frame.channels,
+                        frame.sample_rate
+                    );
                     pipeline.push_pcm(
                         &frame.data,
                         frame.channels,
@@ -171,7 +175,11 @@ impl EngineSession {
                         audio_chunks.push(chunk);
                     }
                     for chunk in audio_chunks {
-                        self.push_translated_output_at_rate(chunk.samples, chunk.sample_rate, chunk.timestamp_ns)?;
+                        self.push_translated_output_at_rate(
+                            chunk.samples,
+                            chunk.sample_rate,
+                            chunk.timestamp_ns,
+                        )?;
                     }
                 } else {
                     eprintln!("[session-core] push_input_pcm: no caption pipeline active");
@@ -369,15 +377,19 @@ impl EngineSession {
             Some(cfg) if cfg.enabled => cfg.clone(),
             _ => {
                 self.caption_pipeline = None;
-                eprintln!("[session-core] caption pipeline skipped: local_stt not enabled or missing");
+                eprintln!(
+                    "[session-core] caption pipeline skipped: local_stt not enabled or missing"
+                );
                 return Ok(());
             }
         };
         let mt = self.config.mt.clone();
         let tts = self.config.tts.clone();
         let local_mt = self.config.local_mt.clone();
-        eprintln!("[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
-            stt.model_id, stt.model_dir, stt.vad_model_path);
+        eprintln!(
+            "[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
+            stt.model_id, stt.model_dir, stt.vad_model_path
+        );
         match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref()) {
             Ok(pipeline) => {
                 eprintln!("[session-core] caption pipeline ready");
@@ -411,12 +423,7 @@ impl EngineSession {
             .as_ref()
             .map(|c| c.model_id.as_str())
             .unwrap_or("");
-        let mt_enabled = self
-            .config
-            .mt
-            .as_ref()
-            .map(|m| m.enabled)
-            .unwrap_or(false);
+        let mt_enabled = self.config.mt.as_ref().map(|m| m.enabled).unwrap_or(false);
         format!(
             "{{\"active\":{},\"model\":\"{}\",\"mt_enabled\":{},\"last_event_ns\":{}}}",
             active, model, mt_enabled, last_ns

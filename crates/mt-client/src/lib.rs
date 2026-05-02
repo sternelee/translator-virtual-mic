@@ -141,9 +141,10 @@ impl MtClient {
             .post(&self.config.endpoint)
             .set("Authorization", &format!("Bearer {}", self.config.api_key))
             .set("Content-Type", "application/json")
-            .send_json(serde_json::to_value(&request).map_err(|e| {
-                MtError::InvalidResponse(format!("serialize request: {e}"))
-            })?);
+            .send_json(
+                serde_json::to_value(&request)
+                    .map_err(|e| MtError::InvalidResponse(format!("serialize request: {e}")))?,
+            );
 
         let resp = match resp {
             Ok(r) => r,

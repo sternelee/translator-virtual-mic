@@ -7,17 +7,18 @@
 //! that the Swift host pulls via FFI.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use common::{EngineError, LocalMtConfig, LocalSttConfig, MtConfig, Result, TtsConfig};
 use mt_client::{MtClient, MtClientConfig};
 use mt_local::{load_backend as load_local_mt_backend, LocalMtBackend};
 use stt_local::audio::{stereo_to_mono, CachedResampler};
 use stt_local::vad::{Vad, VadConfig};
-use stt_local::{load_backend, load_tts_backend, TtsBackend, TranscriberBackend};
+use stt_local::{load_backend, load_tts_backend, TranscriberBackend, TtsBackend};
 
 const VAD_CHUNK_FRAMES: usize = 512; // sherpa Silero default window
 
@@ -26,6 +27,19 @@ struct SegmentJob {
     samples: Vec<f32>,
     timestamp_ns: u64,
     language: String,
+}
+
+#[derive(Debug)]
+struct PartialJob {
+    samples: Vec<f32>,
+    timestamp_ns: u64,
+    language: String,
+}
+
+#[derive(Debug)]
+enum WorkerJob {
+    Partial(PartialJob),
+    Segment(SegmentJob),
 }
 
 /// Synthesized audio returned from the worker to the pipeline (and then to the
@@ -41,12 +55,15 @@ pub struct CaptionEvent {
     pub timestamp_ns: u64,
     pub original: String,
     pub translated: Option<String>,
+    pub is_final: bool,
 }
 
 impl CaptionEvent {
     fn to_json(&self) -> String {
         let mut s = String::with_capacity(128 + self.original.len());
-        s.push_str("{\"type\":\"caption\",\"is_final\":true,\"timestamp_ns\":");
+        s.push_str("{\"type\":\"caption\",\"is_final\":");
+        s.push_str(if self.is_final { "true" } else { "false" });
+        s.push_str(",\"timestamp_ns\":");
         s.push_str(&self.timestamp_ns.to_string());
         s.push_str(",\"text\":\"");
         s.push_str(&escape_json(&self.original));
@@ -65,7 +82,7 @@ pub struct CaptionPipeline {
     resampler: CachedResampler,
     vad: Vad,
     language: String,
-    job_tx: Option<Sender<SegmentJob>>,
+    job_tx: Option<Sender<WorkerJob>>,
     result_rx: Receiver<CaptionEvent>,
     audio_rx: Receiver<AudioChunk>,
     worker: Option<JoinHandle<()>>,
@@ -74,12 +91,28 @@ pub struct CaptionPipeline {
     last_event_at_ns: u64,
     /// Timestamp (ns) when speech was first detected in the current utterance.
     speech_started_at_ns: Option<u64>,
+    // Streaming state
+    utterance_buffer: Vec<f32>,
+    last_partial_at: Option<Instant>,
+    worker_busy: Arc<AtomicBool>,
+    last_emitted_text: Option<String>,
+    partial_interval: Duration,
+    max_partial_samples: usize,
+    overlap_tail_samples: usize,
+    skip_partial_if_busy: bool,
 }
 
 impl CaptionPipeline {
-    pub fn from_config(stt: &LocalSttConfig, mt: Option<&MtConfig>, tts: Option<&TtsConfig>, local_mt_cfg: Option<&LocalMtConfig>) -> Result<Self> {
-        eprintln!("[caption_pipeline] from_config: model_id={} model_dir={:?} vad_path={:?}",
-            stt.model_id, stt.model_dir, stt.vad_model_path);
+    pub fn from_config(
+        stt: &LocalSttConfig,
+        mt: Option<&MtConfig>,
+        tts: Option<&TtsConfig>,
+        local_mt_cfg: Option<&LocalMtConfig>,
+    ) -> Result<Self> {
+        eprintln!(
+            "[caption_pipeline] from_config: model_id={} model_dir={:?} vad_path={:?}",
+            stt.model_id, stt.model_dir, stt.vad_model_path
+        );
         if !stt.enabled {
             return Err(EngineError::new("local STT is not enabled"));
         }
@@ -119,10 +152,9 @@ impl CaptionPipeline {
                 let client_cfg = MtClientConfig::new(key)
                     .with_endpoint(cfg.endpoint.clone())
                     .with_model(cfg.model.clone());
-                Some(Arc::new(
-                    MtClient::new(client_cfg)
-                        .map_err(|e| EngineError::new(format!("MT client init: {e}")))?,
-                ))
+                Some(Arc::new(MtClient::new(client_cfg).map_err(|e| {
+                    EngineError::new(format!("MT client init: {e}"))
+                })?))
             }
             _ => None,
         };
@@ -138,13 +170,9 @@ impl CaptionPipeline {
         // Optional TTS backend.
         let tts_backend: Option<TtsBackend> = match tts {
             Some(cfg) if cfg.enabled => {
-                let backend = load_tts_backend(
-                    &cfg.model_id,
-                    &cfg.model_dir,
-                    cfg.speaker_id,
-                    cfg.speed,
-                )
-                .map_err(|e| EngineError::new(format!("load TTS backend: {e}")))?;
+                let backend =
+                    load_tts_backend(&cfg.model_id, &cfg.model_dir, cfg.speaker_id, cfg.speed)
+                        .map_err(|e| EngineError::new(format!("load TTS backend: {e}")))?;
                 eprintln!("[caption_pipeline] TTS backend loaded: {}", cfg.model_id);
                 Some(backend)
             }
@@ -154,21 +182,44 @@ impl CaptionPipeline {
         // Optional local MT backend.
         let local_mt_backend: Option<Box<dyn LocalMtBackend>> = match local_mt_cfg {
             Some(cfg) if cfg.enabled => {
-                let backend = load_local_mt_backend(&cfg.model_id, &cfg.model_dir, &cfg.source_lang)
-                    .map_err(|e| EngineError::new(format!("load local MT backend: {e}")))?;
-                eprintln!("[caption_pipeline] local MT backend loaded: {}", cfg.model_id);
+                let backend =
+                    load_local_mt_backend(&cfg.model_id, &cfg.model_dir, &cfg.source_lang)
+                        .map_err(|e| EngineError::new(format!("load local MT backend: {e}")))?;
+                eprintln!(
+                    "[caption_pipeline] local MT backend loaded: {}",
+                    cfg.model_id
+                );
                 Some(backend)
             }
             _ => None,
         };
 
-        let (job_tx, job_rx) = channel::<SegmentJob>();
+        let partial_interval = Duration::from_millis(stt.partial_interval_ms);
+        let max_partial_samples = (stt.max_partial_window_seconds * 16_000.0) as usize;
+        let overlap_tail_samples = ((stt.overlap_tail_ms as f32 / 1000.0) * 16_000.0) as usize;
+        let worker_busy = Arc::new(AtomicBool::new(false));
+
+        let (job_tx, job_rx) = channel::<WorkerJob>();
         let (result_tx, result_rx) = channel::<CaptionEvent>();
         let (audio_tx, audio_rx) = channel::<AudioChunk>();
 
+        let worker_busy_clone = worker_busy.clone();
         let worker = thread::Builder::new()
             .name("caption-stt-worker".to_string())
-            .spawn(move || worker_loop(backend, mt_client, local_mt_backend, tts_backend, target_lang, local_mt_target_lang, job_rx, result_tx, audio_tx))
+            .spawn(move || {
+                worker_loop(
+                    backend,
+                    mt_client,
+                    local_mt_backend,
+                    tts_backend,
+                    target_lang,
+                    local_mt_target_lang,
+                    job_rx,
+                    result_tx,
+                    audio_tx,
+                    worker_busy_clone,
+                )
+            })
             .map_err(|e| EngineError::new(format!("spawn worker: {e}")))?;
 
         Ok(Self {
@@ -183,6 +234,14 @@ impl CaptionPipeline {
             pending_audio: VecDeque::new(),
             last_event_at_ns: 0,
             speech_started_at_ns: None,
+            utterance_buffer: Vec::new(),
+            last_partial_at: None,
+            worker_busy,
+            last_emitted_text: None,
+            partial_interval,
+            max_partial_samples,
+            overlap_tail_samples,
+            skip_partial_if_busy: stt.skip_partial_if_busy,
         })
     }
 
@@ -216,26 +275,77 @@ impl CaptionPipeline {
 
         // RMS energy — helps diagnose if mic signal is reaching VAD
         if !resampled.is_empty() {
-            let rms = (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
-            eprintln!("[caption_pipeline] push_pcm: input={} resampled={} rms={:.4} vad_detected={}",
-                samples.len(), resampled.len(), rms, self.vad.detected());
+            let rms =
+                (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
+            eprintln!(
+                "[caption_pipeline] push_pcm: input={} resampled={} rms={:.4} vad_detected={}",
+                samples.len(),
+                resampled.len(),
+                rms,
+                self.vad.detected()
+            );
         } else {
-            eprintln!("[caption_pipeline] push_pcm: input={} resampled=0 (buffering)",
-                samples.len());
+            eprintln!(
+                "[caption_pipeline] push_pcm: input={} resampled=0 (buffering)",
+                samples.len()
+            );
         }
 
         if !resampled.is_empty() {
             let segments = self.vad.push(&resampled);
-            eprintln!("[caption_pipeline] vad produced {} segments", segments.len());
+            let speech_active = self.vad.detected();
+
+            // Accumulate for partials while speech is active.
+            if speech_active {
+                self.utterance_buffer.extend_from_slice(&resampled);
+                let should_send_partial = self
+                    .last_partial_at
+                    .is_none_or(|t| t.elapsed() >= self.partial_interval);
+                if should_send_partial {
+                    let window_len = self.utterance_buffer.len().min(self.max_partial_samples);
+                    let window =
+                        self.utterance_buffer[self.utterance_buffer.len() - window_len..].to_vec();
+                    let can_send =
+                        !self.skip_partial_if_busy || !self.worker_busy.load(Ordering::Relaxed);
+                    if can_send {
+                        if let Some(tx) = &self.job_tx {
+                            self.worker_busy.store(true, Ordering::Relaxed);
+                            let _ = tx.send(WorkerJob::Partial(PartialJob {
+                                samples: window,
+                                timestamp_ns,
+                                language: self.language.clone(),
+                            }));
+                        }
+                    }
+                    self.last_partial_at = Some(Instant::now());
+                }
+            }
+
+            eprintln!(
+                "[caption_pipeline] vad produced {} segments",
+                segments.len()
+            );
             for (i, seg) in segments.iter().enumerate() {
                 eprintln!("[caption_pipeline] segment {}: {} samples", i, seg.len());
                 if let Some(tx) = &self.job_tx {
-                    let _ = tx.send(SegmentJob {
+                    let _ = tx.send(WorkerJob::Segment(SegmentJob {
                         samples: seg.clone(),
                         timestamp_ns,
                         language: self.language.clone(),
-                    });
+                    }));
                 }
+            }
+
+            // If speech ended, handle tail overlap for next utterance.
+            if !speech_active && !self.utterance_buffer.is_empty() {
+                if self.utterance_buffer.len() > self.overlap_tail_samples {
+                    let tail_start = self.utterance_buffer.len() - self.overlap_tail_samples;
+                    let tail = self.utterance_buffer.split_off(tail_start);
+                    self.utterance_buffer = tail;
+                } else {
+                    self.utterance_buffer.clear();
+                }
+                self.last_partial_at = None;
             }
         }
 
@@ -248,13 +358,15 @@ impl CaptionPipeline {
         let segments = self.vad.flush();
         for samples in segments {
             if let Some(tx) = &self.job_tx {
-                let _ = tx.send(SegmentJob {
+                let _ = tx.send(WorkerJob::Segment(SegmentJob {
                     samples,
                     timestamp_ns: now_ns(),
                     language: self.language.clone(),
-                });
+                }));
             }
         }
+        self.utterance_buffer.clear();
+        self.last_partial_at = None;
         self.drain_results();
         Ok(())
     }
@@ -279,6 +391,20 @@ impl CaptionPipeline {
         while let Ok(event) = self.result_rx.try_recv() {
             if event.timestamp_ns > self.last_event_at_ns {
                 self.last_event_at_ns = event.timestamp_ns;
+            }
+            // Deduplication: if this final event's text matches the last
+            // emitted text, skip it — the UI already has the correct draft.
+            if event.is_final {
+                if let Some(ref last) = self.last_emitted_text {
+                    if last == &event.original {
+                        continue;
+                    }
+                }
+                self.last_emitted_text = Some(event.original.clone());
+            } else {
+                // Partial replaces last_emitted_text so we can still catch
+                // duplicate finals later.
+                self.last_emitted_text = Some(event.original.clone());
             }
             self.pending.push_back(event.to_json());
         }
@@ -305,64 +431,99 @@ fn worker_loop(
     tts: Option<TtsBackend>,
     target_lang: String,
     local_mt_target_lang: String,
-    rx: Receiver<SegmentJob>,
+    rx: Receiver<WorkerJob>,
     tx: Sender<CaptionEvent>,
     audio_tx: Sender<AudioChunk>,
+    worker_busy: Arc<AtomicBool>,
 ) {
     while let Ok(job) = rx.recv() {
-        if job.samples.is_empty() {
+        let is_final = matches!(job, WorkerJob::Segment(_));
+        let (samples, timestamp_ns, language) = match job {
+            WorkerJob::Partial(j) => (j.samples, j.timestamp_ns, j.language),
+            WorkerJob::Segment(j) => (j.samples, j.timestamp_ns, j.language),
+        };
+
+        if samples.is_empty() {
+            worker_busy.store(false, Ordering::Relaxed);
             continue;
         }
-        eprintln!("[caption_pipeline] worker: transcribing {} samples", job.samples.len());
-        let original = match backend.transcribe(&job.samples, &job.language) {
+
+        eprintln!(
+            "[caption_pipeline] worker: transcribing {} samples (is_final={})",
+            samples.len(),
+            is_final
+        );
+        let original = match backend.transcribe(&samples, &language) {
             Ok(text) => {
                 eprintln!("[caption_pipeline] worker: transcribed='{}'", text);
                 text
             }
             Err(e) => {
                 eprintln!("[caption_pipeline] worker: transcribe error: {}", e);
+                worker_busy.store(false, Ordering::Relaxed);
                 continue;
             }
         };
         if original.trim().is_empty() {
+            worker_busy.store(false, Ordering::Relaxed);
             continue;
         }
 
-        let translated = if let Some(ref lmt) = local_mt {
-            lmt.translate(&original, &local_mt_target_lang).ok()
-                .filter(|t| !t.trim().is_empty())
+        // Only run MT/TTS on final segments.
+        let (translated, tts_text) = if is_final {
+            let translated = if let Some(ref lmt) = local_mt {
+                lmt.translate(&original, &local_mt_target_lang)
+                    .ok()
+                    .filter(|t| !t.trim().is_empty())
+            } else {
+                mt.as_ref()
+                    .and_then(|client| client.translate(&original, &target_lang).ok())
+                    .filter(|t| !t.trim().is_empty())
+            };
+            let tts_text = translated.as_deref().unwrap_or(&original).to_string();
+            (translated, Some(tts_text))
         } else {
-            mt.as_ref()
-                .and_then(|client| client.translate(&original, &target_lang).ok())
-                .filter(|t| !t.trim().is_empty())
+            (None, None)
         };
 
-        // TTS: synthesize the translated text (or original if no MT).
-        let tts_text = translated.as_deref().unwrap_or(&original).to_string();
-        if let Some(ref tts_backend) = tts {
-            match tts_backend.synthesize(&tts_text) {
-                Ok((samples, sample_rate)) => {
-                    eprintln!("[caption_pipeline] worker: TTS produced {} samples @ {}Hz",
-                        samples.len(), sample_rate);
-                    let _ = audio_tx.send(AudioChunk {
-                        samples,
-                        sample_rate,
-                        timestamp_ns: job.timestamp_ns,
-                    });
+        // TTS only for final.
+        if is_final {
+            if let Some(ref tts_backend) = tts {
+                if let Some(ref text) = tts_text {
+                    match tts_backend.synthesize(text) {
+                        Ok((samples, sample_rate)) => {
+                            eprintln!(
+                                "[caption_pipeline] worker: TTS produced {} samples @ {}Hz",
+                                samples.len(),
+                                sample_rate
+                            );
+                            let _ = audio_tx.send(AudioChunk {
+                                samples,
+                                sample_rate,
+                                timestamp_ns,
+                            });
+                        }
+                        Err(e) => eprintln!("[caption_pipeline] worker: TTS error: {}", e),
+                    }
                 }
-                Err(e) => eprintln!("[caption_pipeline] worker: TTS error: {}", e),
             }
         }
 
         let event = CaptionEvent {
-            timestamp_ns: job.timestamp_ns,
+            timestamp_ns,
             original,
             translated,
+            is_final,
         };
-        eprintln!("[caption_pipeline] worker: sending caption event");
+        eprintln!(
+            "[caption_pipeline] worker: sending caption event (is_final={})",
+            is_final
+        );
         if tx.send(event).is_err() {
+            worker_busy.store(false, Ordering::Relaxed);
             break;
         }
+        worker_busy.store(false, Ordering::Relaxed);
     }
 }
 
@@ -401,6 +562,7 @@ mod tests {
             timestamp_ns: 12345,
             original: "hello \"world\"".to_string(),
             translated: Some("你好".to_string()),
+            is_final: true,
         };
         let json = ev.to_json();
         assert!(json.contains("\"type\":\"caption\""));
@@ -416,9 +578,40 @@ mod tests {
             timestamp_ns: 1,
             original: "hi".to_string(),
             translated: None,
+            is_final: true,
         };
         let json = ev.to_json();
         assert!(!json.contains("translation"));
         assert!(json.contains("\"text\":\"hi\""));
+    }
+
+    #[test]
+    fn caption_event_partial_json_shape() {
+        let ev = CaptionEvent {
+            timestamp_ns: 12345,
+            original: "hello worl".to_string(),
+            translated: None,
+            is_final: false,
+        };
+        let json = ev.to_json();
+        assert!(json.contains("\"is_final\":false"));
+        assert!(json.contains("\"text\":\"hello worl\""));
+        assert!(!json.contains("translation"));
+    }
+
+    #[test]
+    fn worker_job_is_final_matching() {
+        let partial = WorkerJob::Partial(PartialJob {
+            samples: vec![0.0],
+            timestamp_ns: 1,
+            language: "en".into(),
+        });
+        let segment = WorkerJob::Segment(SegmentJob {
+            samples: vec![0.0],
+            timestamp_ns: 2,
+            language: "en".into(),
+        });
+        assert!(!matches!(partial, WorkerJob::Segment(_)));
+        assert!(matches!(segment, WorkerJob::Segment(_)));
     }
 }

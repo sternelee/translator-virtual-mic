@@ -51,8 +51,14 @@ pub trait LocalMtBackend: Send + Sync {
 ///
 /// `src_lang` is an ISO 639-1 code (e.g. `"zh"`, `"en"`) used to build the
 /// NLLB source-language prefix token.  For OPUS-MT models it is ignored.
-pub fn load_backend(model_id: &str, model_dir: &Path, src_lang: &str) -> Result<Box<dyn LocalMtBackend>> {
-    eprintln!("[mt-local] load_backend: model_id={model_id} model_dir={model_dir:?} src_lang={src_lang}");
+pub fn load_backend(
+    model_id: &str,
+    model_dir: &Path,
+    src_lang: &str,
+) -> Result<Box<dyn LocalMtBackend>> {
+    eprintln!(
+        "[mt-local] load_backend: model_id={model_id} model_dir={model_dir:?} src_lang={src_lang}"
+    );
     let dir = model_dir.join(model_id);
     let backend = marian::MarianBackend::new(model_id, &dir, src_lang)?;
     Ok(Box::new(backend))
