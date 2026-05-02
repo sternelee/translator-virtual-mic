@@ -394,10 +394,12 @@ impl CaptionPipeline {
                 self.last_event_at_ns = event.timestamp_ns;
             }
             // Deduplication: if this final event's text matches the last
-            // emitted text, skip it — the UI already has the correct draft.
+            // emitted text AND has no new translation, skip it — the UI
+            // already has the correct draft.  If it carries a translation
+            // (which partials never do), we must emit it.
             if event.is_final {
                 if let Some(ref last) = self.last_emitted_text {
-                    if last == &event.original {
+                    if last == &event.original && event.translated.is_none() {
                         continue;
                     }
                 }
@@ -473,9 +475,9 @@ fn worker_loop(
         // Only run MT/TTS on final segments.
         let (translated, tts_text) = if is_final {
             let translated = if let Some(ref lmt) = local_mt {
-                lmt.translate(&original, &local_mt_target_lang)
-                    .ok()
-                    .filter(|t| !t.trim().is_empty())
+                let result = lmt.translate(&original, &local_mt_target_lang);
+                eprintln!("[caption_pipeline] worker: MT result={:?}", result);
+                result.ok().filter(|t| !t.trim().is_empty())
             } else {
                 mt.as_ref()
                     .and_then(|client| client.translate(&original, &target_lang).ok())

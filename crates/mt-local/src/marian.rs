@@ -180,7 +180,7 @@ impl MarianBackend {
                 .map_err(|e| MtLocalError::Inference(format!("enc_mask tensor: {e}")))?;
             let enc_h_arr = ArrayD::from_shape_vec(
                 IxDyn(&enc_shape),
-                encoder_hidden.as_slice().unwrap().to_vec(),
+                encoder_hidden.iter().cloned().collect(),
             )
             .map_err(|e| MtLocalError::Inference(format!("enc_h reshape: {e}")))?;
             let enc_h_t = Tensor::from_array(enc_h_arr)
@@ -200,7 +200,11 @@ impl MarianBackend {
                 .map_err(|e| MtLocalError::Inference(format!("extract logits: {e}")))?;
 
             let vocab_size = logits_shape[2] as usize;
-            let last_step = &logits_data[(dec_len - 1) * vocab_size..dec_len * vocab_size];
+            // Decoder without KV cache outputs logits for the last step only
+            // (shape [1, 1, vocab_size]), while merged decoder outputs all steps
+            // (shape [1, dec_len, vocab_size]).  Use the last vocab_size entries.
+            let last_step_start = logits_data.len().saturating_sub(vocab_size);
+            let last_step = &logits_data[last_step_start..];
 
             let next_id = last_step
                 .iter()
