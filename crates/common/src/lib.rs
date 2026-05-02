@@ -194,6 +194,51 @@ impl CosyVoiceTtsConfig {
     }
 }
 
+/// Config for ElevenLabs cloud TTS used inside the local caption pipeline.
+#[derive(Clone, Debug)]
+pub struct ElevenLabsTtsConfig {
+    pub enabled: bool,
+    /// ElevenLabs API key (`ELEVENLABS_API_KEY`).
+    pub api_key: String,
+    /// Voice ID of the cloned / chosen voice.
+    pub voice_id: String,
+    /// Model ID, e.g. `"eleven_multilingual_v2"` or `"eleven_turbo_v2_5"`.
+    pub model_id: String,
+}
+
+impl Default for ElevenLabsTtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            voice_id: String::new(),
+            model_id: "eleven_multilingual_v2".to_string(),
+        }
+    }
+}
+
+impl ElevenLabsTtsConfig {
+    pub fn from_json_lossy(raw: &str) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "elevenlabs_tts_enabled").unwrap_or(false);
+        let mentions = raw.contains("elevenlabs_tts_");
+        if !enabled && !mentions {
+            return None;
+        }
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(k) = extract_string_value(raw, "elevenlabs_tts_api_key") {
+            cfg.api_key = k;
+        }
+        if let Some(v) = extract_string_value(raw, "elevenlabs_tts_voice_id") {
+            cfg.voice_id = v;
+        }
+        if let Some(m) = extract_string_value(raw, "elevenlabs_tts_model_id") {
+            cfg.model_id = m;
+        }
+        Some(cfg)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
@@ -211,6 +256,7 @@ pub struct EngineConfig {
     pub tts: Option<TtsConfig>,
     pub local_mt: Option<LocalMtConfig>,
     pub cosyvoice_tts: Option<CosyVoiceTtsConfig>,
+    pub elevenlabs_tts: Option<ElevenLabsTtsConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -233,6 +279,7 @@ impl Default for EngineConfig {
             tts: None,
             local_mt: None,
             cosyvoice_tts: None,
+            elevenlabs_tts: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -302,6 +349,9 @@ impl EngineConfig {
         }
         if let Some(cosyvoice_tts) = CosyVoiceTtsConfig::from_json_lossy(raw, &config) {
             config.cosyvoice_tts = Some(cosyvoice_tts);
+        }
+        if let Some(elevenlabs_tts) = ElevenLabsTtsConfig::from_json_lossy(raw) {
+            config.elevenlabs_tts = Some(elevenlabs_tts);
         }
 
         config

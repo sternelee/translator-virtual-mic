@@ -1411,6 +1411,8 @@ dependencies = [
  "mt-local",
  "output-bridge",
  "stt-local",
+ "tts-cosyvoice",
+ "tts-elevenlabs",
 ]
 
 [[package]]
@@ -1653,6 +1655,24 @@ checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
 dependencies = [
  "num-integer",
  "strength_reduce",
+]
+
+[[package]]
+name = "tts-cosyvoice"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "thiserror",
+ "ureq 2.12.1",
+]
+
+[[package]]
+name = "tts-elevenlabs"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "thiserror",
+ "ureq 2.12.1",
 ]
 
 [[package]]

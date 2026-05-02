@@ -11,6 +11,7 @@ members = [
   "crates/mt-client",
   "crates/mt-local",
   "crates/tts-cosyvoice",
+  "crates/tts-elevenlabs",
 ]
 resolver = "2"
 

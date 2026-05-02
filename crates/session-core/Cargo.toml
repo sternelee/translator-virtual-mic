@@ -13,3 +13,4 @@ stt-local = { path = "../stt-local" }
 mt-client = { path = "../mt-client" }
 mt-local = { path = "../mt-local" }
 tts-cosyvoice = { path = "../tts-cosyvoice" }
+tts-elevenlabs = { path = "../tts-elevenlabs" }

@@ -1,0 +1,10 @@
+[package]
+name = "tts-elevenlabs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+ureq = { version = "2", features = ["tls"] }
+thiserror = "2"

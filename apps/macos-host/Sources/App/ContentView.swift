@@ -183,59 +183,196 @@ struct ContentView: View {
                 }
 
                 if viewModel.selectedTranslationProvider == .localCaption {
-                    Section("Local TTS") {
-                        Picker("TTS Model", selection: $viewModel.selectedTtsModelId) {
-                            ForEach(TtsModelRegistry.allModels) { model in
-                                let downloaded = viewModel.isTtsModelDownloaded(model.id)
-                                Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
-                            }
-                        }
-                        if let model = TtsModelRegistry.model(for: viewModel.selectedTtsModelId) {
-                            Text(model.description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("Size: \(model.sizeDisplay)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            HStack {
-                                if viewModel.isTtsModelDownloaded(model.id) {
-                                    Button("Delete") {
-                                        viewModel.deleteTtsModel(model.id)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(.red)
-                                } else {
-                                    Button("Download") {
-                                        viewModel.downloadTtsModel(model.id)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(viewModel.ttsModelDownloadState != .idle)
-                                }
-                                Spacer()
-                            }
-                            if case .downloading(let progress) = viewModel.ttsModelDownloadState,
-                               progress.modelId == model.id {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
-                                    Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
-                                        .font(.caption2)
-                                }
+                    Section("TTS") {
+                        Picker("TTS Mode", selection: $viewModel.ttsModeSelection) {
+                            ForEach(TtsModeSelection.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
                             }
                         }
 
-                        Toggle("Use local TTS", isOn: $viewModel.ttsEnabled)
-                            .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Speed")
-                                Spacer()
-                                Text(String(format: "%.1fx", viewModel.ttsSpeed))
+                        // ── Local TTS ──────────────────────────────────────
+                        if viewModel.ttsModeSelection == .local {
+                            Picker("Model", selection: $viewModel.selectedTtsModelId) {
+                                ForEach(TtsModelRegistry.allModels) { model in
+                                    let downloaded = viewModel.isTtsModelDownloaded(model.id)
+                                    Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
+                                }
+                            }
+                            if let model = TtsModelRegistry.model(for: viewModel.selectedTtsModelId) {
+                                Text(model.description)
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Text("Size: \(model.sizeDisplay)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack {
+                                    if viewModel.isTtsModelDownloaded(model.id) {
+                                        Button("Delete") {
+                                            viewModel.deleteTtsModel(model.id)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.red)
+                                    } else {
+                                        Button("Download") {
+                                            viewModel.downloadTtsModel(model.id)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(viewModel.ttsModelDownloadState != .idle)
+                                    }
+                                    Spacer()
+                                }
+                                if case .downloading(let progress) = viewModel.ttsModelDownloadState,
+                                   progress.modelId == model.id {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
+                                        Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
+                                            .font(.caption2)
+                                    }
+                                }
                             }
-                            Slider(value: $viewModel.ttsSpeed, in: 0.5...2.0, step: 0.1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Speed")
+                                    Spacer()
+                                    Text(String(format: "%.1fx", viewModel.ttsSpeed))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $viewModel.ttsSpeed, in: 0.5...2.0, step: 0.1)
+                            }
+                            .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
                         }
-                        .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
+
+                        // ── Chatterbox TTS ─────────────────────────────────
+                        if viewModel.ttsModeSelection == .chatterbox {
+                            HStack {
+                                Circle()
+                                    .fill(viewModel.cosyvoiceServerRunning ? Color.green : Color.gray)
+                                    .frame(width: 8, height: 8)
+                                Text(viewModel.cosyvoiceServerRunning ? "Server running" : "Server stopped")
+                                    .font(.caption)
+                                Spacer()
+                                Button(viewModel.cosyvoiceServerRunning ? "Stop" : "Start") {
+                                    if viewModel.cosyvoiceServerRunning {
+                                        viewModel.stopCosyvoiceServer()
+                                    } else {
+                                        viewModel.startCosyvoiceServer()
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            HStack {
+                                Text("chatterbox_server.py")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField(
+                                    "path/to/scripts/chatterbox_server.py",
+                                    text: $viewModel.cosyvoiceServerScriptPath
+                                )
+                                .font(.caption)
+                                .textFieldStyle(.roundedBorder)
+                            }
+
+                            HStack {
+                                Text("Port")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("50000", value: $viewModel.cosyvoiceServerPort, format: .number)
+                                    .font(.caption)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 70)
+                                Spacer()
+                            }
+
+                            Divider()
+
+                            Text("Reference Voice")
+                                .font(.caption)
+                                .bold()
+
+                            HStack {
+                                Text("Reference audio")
+                                    .font(.caption)
+                                Spacer()
+                                if viewModel.cosyvoiceRefWavReady {
+                                    Label("Ready", systemImage: "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Label("None", systemImage: "xmark.circle")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            if viewModel.cosyvoiceRecording {
+                                HStack {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text(String(
+                                        format: "Recording %.1fs / 10s",
+                                        viewModel.cosyvoiceRecordingSeconds
+                                    ))
+                                    .font(.caption)
+                                    Spacer()
+                                    Button("Stop") { viewModel.stopVoiceCloneRecording() }
+                                        .buttonStyle(.bordered)
+                                }
+                            } else {
+                                Button("Record Reference Voice (≤10s)") {
+                                    viewModel.startVoiceCloneRecording()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            TextField(
+                                "Transcription of reference audio (required)",
+                                text: $viewModel.cosyvoicePromptText
+                            )
+                            .font(.caption)
+                            .textFieldStyle(.roundedBorder)
+
+                            Divider()
+
+                            Text("Test Cloned Voice")
+                                .font(.caption)
+                                .bold()
+
+                            TextField("Text to synthesise…", text: $viewModel.cosyvoiceTestText)
+                                .font(.caption)
+                                .textFieldStyle(.roundedBorder)
+
+                            Button(viewModel.cosyvoiceTesting ? "Testing…" : "Play Test") {
+                                viewModel.testCosyvoiceVoice()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                !viewModel.cosyvoiceServerRunning
+                                    || viewModel.cosyvoiceTesting
+                                    || !viewModel.cosyvoiceRefWavReady
+                            )
+                        }
+
+                        // ── ElevenLabs TTS ─────────────────────────────────
+                        if viewModel.ttsModeSelection == .elevenlabs {
+                            Text("Uses ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID from environment.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            let hasKey = ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"] != nil
+                            let hasVoice = ProcessInfo.processInfo.environment["ELEVENLABS_VOICE_ID"] != nil
+                            Label(
+                                hasKey ? "API key found" : "ELEVENLABS_API_KEY not set",
+                                systemImage: hasKey ? "checkmark.circle.fill" : "xmark.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(hasKey ? .green : .red)
+                            Label(
+                                hasVoice ? "Voice ID found" : "ELEVENLABS_VOICE_ID not set",
+                                systemImage: hasVoice ? "checkmark.circle.fill" : "xmark.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(hasVoice ? .green : .red)
+                        }
                     }
                 }
 

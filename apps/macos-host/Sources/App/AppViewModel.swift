@@ -23,6 +23,24 @@ struct SharedBufferMonitorSnapshot {
     )
 }
 
+enum TtsModeSelection: String, CaseIterable, Identifiable {
+    case none = "none"
+    case local = "local"
+    case chatterbox = "chatterbox"
+    case elevenlabs = "elevenlabs"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .none: "None"
+        case .local: "Local TTS"
+        case .chatterbox: "Chatterbox (Voice Cloning)"
+        case .elevenlabs: "ElevenLabs API"
+        }
+    }
+}
+
 enum TranslationServiceProvider: String, CaseIterable, Identifiable {
     case none = "none"
     case openAIRealtime = "openai_realtime"
@@ -76,7 +94,24 @@ final class AppViewModel: ObservableObject {
     @Published var selectedTtsModelId: String = "kokoro-en-v0_19"
     @Published var ttsSpeed: Double = 1.0
     @Published var ttsModelDownloadState: DownloadState = .idle
+    @Published var ttsModeSelection: TtsModeSelection = .none
 
+    // ElevenLabs TTS
+    @Published var elevenlabsTtsEnabled: Bool = false
+
+    // CosyVoice TTS (voice cloning)
+    @Published var cosyvoiceServerScriptPath: String = ""
+    @Published var cosyvoiceServerPort: Int = 50000
+    @Published var cosyvoiceServerRunning: Bool = false
+    @Published var cosyvoiceTtsEnabled: Bool = false
+    @Published var cosyvoicePromptText: String = ""
+    @Published var cosyvoiceRecording: Bool = false
+    @Published var cosyvoiceRecordingSeconds: Double = 0
+    @Published var cosyvoiceRefWavReady: Bool = false
+    @Published var cosyvoiceTestText: String = "Hello, this is a voice cloning test."
+    @Published var cosyvoiceTesting: Bool = false
+
+    private let cosyvoiceService = CosyVoiceService()
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
     private let openAIRealtimeService = OpenAIRealtimeService()
@@ -93,6 +128,7 @@ final class AppViewModel: ObservableObject {
     init() {
         refreshDevices()
         requestMicrophonePermission()
+        cosyvoiceRefWavReady = cosyvoiceService.refWavExists
     }
 
     func requestMicrophonePermission() {
@@ -321,17 +357,31 @@ final class AppViewModel: ObservableObject {
             let localMtModelDir = env["LOCAL_MT_MODEL_DIR"] ?? modelDir
             let localMtSourceLang = env["LOCAL_MT_SOURCE_LANG"] ?? "zh"
 
-            // TTS config
-            let ttsEnabledStr = (ttsEnabled && isTtsModelDownloaded(selectedTtsModelId)) ? "true" : "false"
+            // TTS config — driven by ttsModeSelection
             let ttsModelDir = FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)
                 .first?
                 .appendingPathComponent("translator-virtual-mic/models/tts")
                 .path ?? ""
             let ttsSpeedStr = String(format: "%.2f", ttsSpeed)
+            let ttsEnabledStr = (ttsModeSelection == .local && isTtsModelDownloaded(selectedTtsModelId)) ? "true" : "false"
 
-            // Append local_stt, mt, local_mt, and tts keys by slicing before the final "}"
-            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr)}"#
+            // CosyVoice TTS config
+            let cvEndpoint = "http://127.0.0.1:\(cosyvoiceServerPort)"
+            let cvEnabledStr = (ttsModeSelection == .chatterbox && cosyvoiceServerRunning) ? "true" : "false"
+            let cvWavPath = CosyVoiceService.refWavPath
+            let cvPromptText = cosyvoicePromptText
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+
+            // ElevenLabs TTS config
+            let elEnabledStr = (ttsModeSelection == .elevenlabs) ? "true" : "false"
+            let elApiKey = env["ELEVENLABS_API_KEY"] ?? ""
+            let elVoiceId = env["ELEVENLABS_VOICE_ID"] ?? ""
+            let elModelId = env["ELEVENLABS_MODEL_ID"] ?? "eleven_multilingual_v2"
+
+            // Append local_stt, mt, local_mt, tts, cosyvoice_tts, and elevenlabs_tts keys
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr),"cosyvoice_tts_enabled":\#(cvEnabledStr),"cosyvoice_tts_endpoint":"\#(cvEndpoint)","cosyvoice_tts_prompt_wav_path":"\#(cvWavPath)","cosyvoice_tts_prompt_text":"\#(cvPromptText)","elevenlabs_tts_enabled":\#(elEnabledStr),"elevenlabs_tts_api_key":"\#(elApiKey)","elevenlabs_tts_voice_id":"\#(elVoiceId)","elevenlabs_tts_model_id":"\#(elModelId)"}"#
             if let idx = base.lastIndex(of: "}") {
                 base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
             }
@@ -613,6 +663,60 @@ final class AppViewModel: ObservableObject {
         guard let model = TtsModelRegistry.model(for: modelId) else { return }
         modelDownloadService.deleteTtsModel(model)
         appendLog("Deleted TTS model \(modelId)")
+    }
+
+    // MARK: - CosyVoice TTS
+
+    func startCosyvoiceServer() {
+        cosyvoiceService.startServer(
+            scriptPath: cosyvoiceServerScriptPath,
+            port: cosyvoiceServerPort
+        ) { [weak self] msg in
+            self?.appendLog(msg)
+            self?.cosyvoiceServerRunning = self?.cosyvoiceService.serverIsRunning ?? false
+        }
+        cosyvoiceServerRunning = cosyvoiceService.serverIsRunning
+    }
+
+    func stopCosyvoiceServer() {
+        cosyvoiceService.stopServer { [weak self] msg in self?.appendLog(msg) }
+        cosyvoiceServerRunning = false
+        if cosyvoiceTtsEnabled { cosyvoiceTtsEnabled = false }
+    }
+
+    func startVoiceCloneRecording() {
+        cosyvoiceRecording = true
+        cosyvoiceRecordingSeconds = 0
+        cosyvoiceService.startRecording { [weak self] elapsed in
+            self?.cosyvoiceRecordingSeconds = elapsed
+        } onStop: { [weak self] msg in
+            self?.appendLog(msg)
+            self?.cosyvoiceRecording = false
+            self?.cosyvoiceRecordingSeconds = 0
+            self?.cosyvoiceRefWavReady = self?.cosyvoiceService.refWavExists ?? false
+        }
+    }
+
+    func stopVoiceCloneRecording() {
+        cosyvoiceService.stopRecording()
+        appendLog("Reference recording saved")
+        cosyvoiceRecording = false
+        cosyvoiceRecordingSeconds = 0
+        cosyvoiceRefWavReady = cosyvoiceService.refWavExists
+    }
+
+    func testCosyvoiceVoice() {
+        guard !cosyvoiceTesting else { return }
+        cosyvoiceTesting = true
+        cosyvoiceService.testVoice(
+            port: cosyvoiceServerPort,
+            ttsText: cosyvoiceTestText,
+            promptText: cosyvoicePromptText
+        ) { [weak self] msg in
+            self?.appendLog(msg)
+        } completion: { [weak self] in
+            self?.cosyvoiceTesting = false
+        }
     }
 
     private func appendLog(_ message: String) {
