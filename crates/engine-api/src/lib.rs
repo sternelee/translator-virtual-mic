@@ -573,6 +573,42 @@ pub extern "C" fn engine_take_next_caption_event(
 }
 
 #[no_mangle]
+pub extern "C" fn engine_take_next_log_line(
+    handle: *mut EngineHandle,
+    out_buf: *mut c_char,
+    max_len: i32,
+) -> i32 {
+    with_handle(handle, |handle| {
+        if out_buf.is_null() {
+            return Err("out_buf pointer is null".to_string());
+        }
+        if max_len <= 0 {
+            return Err("max_len must be positive".to_string());
+        }
+
+        let maybe_line = handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .take_next_log();
+        let Some(line) = maybe_line else {
+            unsafe { ptr::write(out_buf, 0) };
+            return Ok(0);
+        };
+
+        let bytes = line.as_bytes();
+        let writable = (max_len as usize).saturating_sub(1);
+        let copy_len = writable.min(bytes.len());
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out_buf, copy_len);
+            ptr::write(out_buf.add(copy_len), 0);
+        }
+        Ok(copy_len as i32)
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
 pub extern "C" fn engine_get_caption_state_json(handle: *mut EngineHandle) -> *const c_char {
     if handle.is_null() {
         return ptr::null();

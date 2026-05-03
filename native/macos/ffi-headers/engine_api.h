@@ -76,6 +76,12 @@ int32_t engine_take_next_caption_event(
     int32_t max_len
 );
 
+int32_t engine_take_next_log_line(
+    EngineHandle *handle,
+    char *out_buf,
+    int32_t max_len
+);
+
 const char *engine_get_last_error(EngineHandle *handle);
 const char *engine_get_metrics_json(EngineHandle *handle);
 const char *engine_get_shared_output_path(EngineHandle *handle);

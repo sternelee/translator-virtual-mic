@@ -2,6 +2,7 @@ pub mod azure_voice_live;
 pub mod caption_pipeline;
 pub mod openai_realtime;
 
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use audio_core::{build_frame, SampleRingBuffer};
@@ -23,6 +24,8 @@ pub struct EngineSession {
     openai_realtime: Option<OpenAIRealtimeBridge>,
     caption_pipeline: Option<CaptionPipeline>,
     running: bool,
+    log_tx: Option<Sender<String>>,
+    log_rx: Receiver<String>,
 }
 
 impl EngineSession {
@@ -38,6 +41,7 @@ impl EngineSession {
             channels,
             config.output_sample_rate,
         ));
+        let (log_tx, log_rx) = channel::<String>();
         Self {
             config,
             metrics: Arc::new(EngineMetrics::default()),
@@ -48,6 +52,8 @@ impl EngineSession {
             openai_realtime: None,
             caption_pipeline: None,
             running: false,
+            log_tx: Some(log_tx),
+            log_rx,
         }
     }
 
@@ -223,6 +229,16 @@ impl EngineSession {
         self.metrics.to_json(depth_ms)
     }
 
+    pub fn log(&self, message: String) {
+        if let Some(tx) = &self.log_tx {
+            let _ = tx.send(message);
+        }
+    }
+
+    pub fn take_next_log(&self) -> Option<String> {
+        self.log_rx.try_recv().ok()
+    }
+
     pub fn current_mode(&self) -> i32 {
         self.config.mode.as_i32()
     }
@@ -377,8 +393,8 @@ impl EngineSession {
             Some(cfg) if cfg.enabled => cfg.clone(),
             _ => {
                 self.caption_pipeline = None;
-                eprintln!(
-                    "[session-core] caption pipeline skipped: local_stt not enabled or missing"
+                self.log(
+                    "[session-core] caption pipeline skipped: local_stt not enabled or missing".to_string()
                 );
                 return Ok(());
             }
@@ -389,18 +405,19 @@ impl EngineSession {
         let cosyvoice_tts = self.config.cosyvoice_tts.clone();
         let elevenlabs_tts = self.config.elevenlabs_tts.clone();
         let minimax_tts = self.config.minimax_tts.clone();
-        eprintln!(
+        self.log(format!(
             "[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
             stt.model_id, stt.model_dir, stt.vad_model_path
-        );
-        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref(), cosyvoice_tts.as_ref(), elevenlabs_tts.as_ref(), minimax_tts.as_ref()) {
+        ));
+        let log_tx = self.log_tx.clone();
+        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref(), cosyvoice_tts.as_ref(), elevenlabs_tts.as_ref(), minimax_tts.as_ref(), log_tx) {
             Ok(pipeline) => {
-                eprintln!("[session-core] caption pipeline ready");
+                self.log("[session-core] caption pipeline ready".to_string());
                 self.caption_pipeline = Some(pipeline);
             }
             Err(e) => {
-                eprintln!("[session-core] caption pipeline build failed: {}", e);
-                return Err(e);
+                self.log(format!("[session-core] caption pipeline build failed: {e}"));
+                self.caption_pipeline = None;
             }
         }
         Ok(())

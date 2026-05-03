@@ -121,6 +121,19 @@ final class EngineBox {
         return String(cString: raw)
     }
 
+    func takeNextLogLine() -> String? {
+        guard let runtime, let handle else { return nil }
+        let bufferSize = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        buffer.initialize(repeating: 0, count: bufferSize)
+        let written = runtime.takeNextLogLine(handle, buffer, Int32(bufferSize))
+        guard written > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
     func lastError() -> String {
         if let runtimeError {
             return runtimeError

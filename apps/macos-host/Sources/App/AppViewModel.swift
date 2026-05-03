@@ -484,6 +484,7 @@ final class AppViewModel: ObservableObject {
             while !Task.isCancelled {
                 await MainActor.run {
                     self?.refreshSharedBufferStatus(logOnChange: false)
+                    self?.drainEngineLogs()
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
@@ -725,6 +726,13 @@ final class AppViewModel: ObservableObject {
             self?.appendLog(msg)
         } completion: { [weak self] in
             self?.cosyvoiceTesting = false
+        }
+    }
+
+    private func drainEngineLogs() {
+        guard let engine else { return }
+        while let line = engine.takeNextLogLine() {
+            appendLog(line)
         }
     }
 
