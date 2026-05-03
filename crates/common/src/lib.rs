@@ -239,6 +239,83 @@ impl ElevenLabsTtsConfig {
     }
 }
 
+/// Config for MiniMax cloud TTS used inside the local caption pipeline.
+#[derive(Clone, Debug)]
+pub struct MiniMaxTtsConfig {
+    pub enabled: bool,
+    /// MiniMax API host, e.g. `"https://api.minimaxi.com"`.
+    pub api_host: String,
+    /// MiniMax API key (`MINIMAX_API_KEY`).
+    pub api_key: String,
+    /// Voice ID, e.g. `"male-qn-qingse"`.
+    pub voice_id: String,
+    /// Model ID, e.g. `"speech-01-turbo"`.
+    pub model: String,
+    /// Emotion: `"happy"`, `"sad"`, `"angry"`, etc.
+    pub emotion: String,
+    pub speed: f32,
+    pub vol: f32,
+    pub pitch: i32,
+    pub sample_rate: u32,
+}
+
+impl Default for MiniMaxTtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_host: String::new(),
+            api_key: String::new(),
+            voice_id: String::new(),
+            model: String::new(),
+            emotion: String::new(),
+            speed: 1.0,
+            vol: 1.0,
+            pitch: 0,
+            sample_rate: 24_000,
+        }
+    }
+}
+
+impl MiniMaxTtsConfig {
+    pub fn from_json_lossy(raw: &str) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "minimax_tts_enabled").unwrap_or(false);
+        let mentions = raw.contains("minimax_tts_");
+        if !enabled && !mentions {
+            return None;
+        }
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(k) = extract_string_value(raw, "minimax_tts_api_key") {
+            cfg.api_key = k;
+        }
+        if let Some(v) = extract_string_value(raw, "minimax_tts_voice_id") {
+            cfg.voice_id = v;
+        }
+        if let Some(m) = extract_string_value(raw, "minimax_tts_model") {
+            cfg.model = m;
+        }
+        if let Some(e) = extract_string_value(raw, "minimax_tts_emotion") {
+            cfg.emotion = e;
+        }
+        if let Some(h) = extract_string_value(raw, "minimax_tts_api_host") {
+            cfg.api_host = h;
+        }
+        if let Some(s) = extract_f32_value(raw, "minimax_tts_speed") {
+            cfg.speed = s;
+        }
+        if let Some(v) = extract_f32_value(raw, "minimax_tts_vol") {
+            cfg.vol = v;
+        }
+        if let Some(p) = extract_i32_value(raw, "minimax_tts_pitch") {
+            cfg.pitch = p;
+        }
+        if let Some(sr) = extract_u32_value(raw, "minimax_tts_sample_rate") {
+            cfg.sample_rate = sr;
+        }
+        Some(cfg)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
@@ -257,6 +334,7 @@ pub struct EngineConfig {
     pub local_mt: Option<LocalMtConfig>,
     pub cosyvoice_tts: Option<CosyVoiceTtsConfig>,
     pub elevenlabs_tts: Option<ElevenLabsTtsConfig>,
+    pub minimax_tts: Option<MiniMaxTtsConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -280,6 +358,7 @@ impl Default for EngineConfig {
             local_mt: None,
             cosyvoice_tts: None,
             elevenlabs_tts: None,
+            minimax_tts: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -352,6 +431,9 @@ impl EngineConfig {
         }
         if let Some(elevenlabs_tts) = ElevenLabsTtsConfig::from_json_lossy(raw) {
             config.elevenlabs_tts = Some(elevenlabs_tts);
+        }
+        if let Some(minimax_tts) = MiniMaxTtsConfig::from_json_lossy(raw) {
+            config.minimax_tts = Some(minimax_tts);
         }
 
         config
@@ -616,6 +698,38 @@ fn extract_u64_value(raw: &str, key: &str) -> Option<u64> {
             .take_while(|ch| ch.is_ascii_digit())
             .collect::<String>();
         if let Ok(parsed) = value.parse::<u64>() {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn extract_i32_value(raw: &str, key: &str) -> Option<i32> {
+    let patterns = [format!("\"{key}\":"), format!("{key} = ")];
+    for pattern in patterns {
+        let start = raw.find(&pattern)? + pattern.len();
+        let value = raw[start..]
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '-' | '+'))
+            .collect::<String>();
+        if let Ok(parsed) = value.parse::<i32>() {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn extract_u32_value(raw: &str, key: &str) -> Option<u32> {
+    let patterns = [format!("\"{key}\":"), format!("{key} = ")];
+    for pattern in patterns {
+        let start = raw.find(&pattern)? + pattern.len();
+        let value = raw[start..]
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(parsed) = value.parse::<u32>() {
             return Some(parsed);
         }
     }

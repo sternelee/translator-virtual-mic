@@ -373,6 +373,27 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(hasVoice ? .green : .red)
                         }
+
+                        // ── MiniMax TTS ────────────────────────────────────
+                        if viewModel.ttsModeSelection == .minimax {
+                            Text("Uses MINIMAX_API_KEY and MINIMAX_VOICE_ID from environment.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            let hasKey = ProcessInfo.processInfo.environment["MINIMAX_API_KEY"] != nil
+                            let hasVoice = ProcessInfo.processInfo.environment["MINIMAX_VOICE_ID"] != nil
+                            Label(
+                                hasKey ? "API key found" : "MINIMAX_API_KEY not set",
+                                systemImage: hasKey ? "checkmark.circle.fill" : "xmark.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(hasKey ? .green : .red)
+                            Label(
+                                hasVoice ? "Voice ID found" : "MINIMAX_VOICE_ID not set",
+                                systemImage: hasVoice ? "checkmark.circle.fill" : "xmark.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(hasVoice ? .green : .red)
+                        }
                     }
                 }
 

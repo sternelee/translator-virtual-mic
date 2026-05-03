@@ -13,9 +13,10 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use common::{CosyVoiceTtsConfig, ElevenLabsTtsConfig, EngineError, LocalMtConfig, LocalSttConfig, MtConfig, Result, TtsConfig};
+use common::{CosyVoiceTtsConfig, ElevenLabsTtsConfig, EngineError, LocalMtConfig, LocalSttConfig, MiniMaxTtsConfig, MtConfig, Result, TtsConfig};
 use tts_cosyvoice::{CosyVoiceClient, CosyVoiceConfig};
 use tts_elevenlabs::{ElevenLabsTtsClient, ElevenLabsTtsConfig as ElTtsConfig};
+use tts_minimax::{MiniMaxTtsClient};
 use mt_client::{MtClient, MtClientConfig};
 use mt_local::{load_backend as load_local_mt_backend, LocalMtBackend};
 use stt_local::audio::{stereo_to_mono, CachedResampler};
@@ -112,6 +113,7 @@ impl CaptionPipeline {
         local_mt_cfg: Option<&LocalMtConfig>,
         cosyvoice_cfg: Option<&CosyVoiceTtsConfig>,
         elevenlabs_tts_cfg: Option<&ElevenLabsTtsConfig>,
+        minimax_tts_cfg: Option<&MiniMaxTtsConfig>,
     ) -> Result<Self> {
         eprintln!(
             "[caption_pipeline] from_config: model_id={} model_dir={:?} vad_path={:?}",
@@ -256,6 +258,23 @@ impl CaptionPipeline {
             _ => None,
         };
 
+        // Optional MiniMax TTS client (highest priority if enabled).
+        let minimax_client: Option<MiniMaxTtsClient> = match minimax_tts_cfg {
+            Some(cfg) if cfg.enabled => {
+                match MiniMaxTtsClient::new(cfg) {
+                    Ok(client) => {
+                        eprintln!("[caption_pipeline] MiniMax TTS client ready");
+                        Some(client)
+                    }
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] MiniMax TTS init failed: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let partial_interval = Duration::from_millis(stt.partial_interval_ms);
         let max_partial_samples = (stt.max_partial_window_seconds * 16_000.0) as usize;
         let overlap_tail_samples = ((stt.overlap_tail_ms as f32 / 1000.0) * 16_000.0) as usize;
@@ -276,6 +295,7 @@ impl CaptionPipeline {
                     tts_backend,
                     cosyvoice_client,
                     elevenlabs_client,
+                    minimax_client,
                     target_lang,
                     local_mt_target_lang,
                     job_rx,
@@ -498,6 +518,7 @@ fn worker_loop(
     tts: Option<TtsBackend>,
     cosyvoice: Option<CosyVoiceClient>,
     elevenlabs: Option<ElevenLabsTtsClient>,
+    minimax: Option<MiniMaxTtsClient>,
     target_lang: String,
     local_mt_target_lang: String,
     rx: Receiver<WorkerJob>,
@@ -568,15 +589,30 @@ fn worker_loop(
             None
         };
 
-        // TTS priority: ElevenLabs > CosyVoice > sherpa-onnx.
+        // TTS priority: MiniMax > ElevenLabs > CosyVoice > sherpa-onnx.
         // Dedup: skip if candidate equals last synthesized text.
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
-        let has_tts = elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
+        let has_tts = minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
         if has_tts
             && !tts_candidate.trim().is_empty()
             && tts_candidate.trim() != last_tts_text.trim()
         {
-            let audio_result: Option<(Vec<f32>, u32)> = if let Some(ref el) = elevenlabs {
+            let audio_result: Option<(Vec<f32>, u32)> = if let Some(ref mm) = minimax {
+                match mm.synthesize(tts_candidate) {
+                    Ok((samples, rate)) if !samples.is_empty() => {
+                        eprintln!(
+                            "[caption_pipeline] worker: MiniMax TTS produced {} samples @ {}Hz (is_final={})",
+                            samples.len(), rate, is_final
+                        );
+                        Some((samples, rate))
+                    }
+                    Ok(_) => None,
+                    Err(e) => {
+                        eprintln!("[caption_pipeline] worker: MiniMax TTS error: {e}");
+                        None
+                    }
+                }
+            } else if let Some(ref el) = elevenlabs {
                 match el.synthesize(tts_candidate) {
                     Ok((samples, rate)) if !samples.is_empty() => {
                         eprintln!(

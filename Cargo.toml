@@ -12,6 +12,7 @@ members = [
   "crates/mt-local",
   "crates/tts-cosyvoice",
   "crates/tts-elevenlabs",
+  "crates/tts-minimax",
 ]
 resolver = "2"
 

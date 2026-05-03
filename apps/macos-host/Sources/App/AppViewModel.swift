@@ -28,6 +28,7 @@ enum TtsModeSelection: String, CaseIterable, Identifiable {
     case local = "local"
     case chatterbox = "chatterbox"
     case elevenlabs = "elevenlabs"
+    case minimax = "minimax"
 
     var id: String { rawValue }
 
@@ -37,6 +38,7 @@ enum TtsModeSelection: String, CaseIterable, Identifiable {
         case .local: "Local TTS"
         case .chatterbox: "Chatterbox (Voice Cloning)"
         case .elevenlabs: "ElevenLabs API"
+        case .minimax: "MiniMax API"
         }
     }
 }
@@ -380,8 +382,15 @@ final class AppViewModel: ObservableObject {
             let elVoiceId = env["ELEVENLABS_VOICE_ID"] ?? ""
             let elModelId = env["ELEVENLABS_MODEL_ID"] ?? "eleven_multilingual_v2"
 
-            // Append local_stt, mt, local_mt, tts, cosyvoice_tts, and elevenlabs_tts keys
-            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr),"cosyvoice_tts_enabled":\#(cvEnabledStr),"cosyvoice_tts_endpoint":"\#(cvEndpoint)","cosyvoice_tts_prompt_wav_path":"\#(cvWavPath)","cosyvoice_tts_prompt_text":"\#(cvPromptText)","elevenlabs_tts_enabled":\#(elEnabledStr),"elevenlabs_tts_api_key":"\#(elApiKey)","elevenlabs_tts_voice_id":"\#(elVoiceId)","elevenlabs_tts_model_id":"\#(elModelId)"}"#
+            // MiniMax TTS config
+            let mmEnabledStr = (ttsModeSelection == .minimax) ? "true" : "false"
+            let mmApiKey = env["MINIMAX_API_KEY"] ?? ""
+            let mmVoiceId = env["MINIMAX_VOICE_ID"] ?? ""
+            let mmModel = env["MINIMAX_TTS_MODEL"] ?? "speech-01-turbo"
+            let mmApiHost = env["MINIMAX_API_HOST"] ?? "https://api.minimaxi.com"
+
+            // Append local_stt, mt, local_mt, tts, cosyvoice_tts, elevenlabs_tts, and minimax_tts keys
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr),"cosyvoice_tts_enabled":\#(cvEnabledStr),"cosyvoice_tts_endpoint":"\#(cvEndpoint)","cosyvoice_tts_prompt_wav_path":"\#(cvWavPath)","cosyvoice_tts_prompt_text":"\#(cvPromptText)","elevenlabs_tts_enabled":\#(elEnabledStr),"elevenlabs_tts_api_key":"\#(elApiKey)","elevenlabs_tts_voice_id":"\#(elVoiceId)","elevenlabs_tts_model_id":"\#(elModelId)","minimax_tts_enabled":\#(mmEnabledStr),"minimax_tts_api_key":"\#(mmApiKey)","minimax_tts_voice_id":"\#(mmVoiceId)","minimax_tts_model":"\#(mmModel)","minimax_tts_api_host":"\#(mmApiHost)"}"#
             if let idx = base.lastIndex(of: "}") {
                 base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
             }
