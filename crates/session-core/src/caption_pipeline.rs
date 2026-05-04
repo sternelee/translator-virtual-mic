@@ -110,6 +110,16 @@ pub struct CaptionPipeline {
     max_partial_samples: usize,
     overlap_tail_samples: usize,
     skip_partial_if_busy: bool,
+    /// Optional metrics reference for latency reporting.
+    metrics: Option<Arc<metrics::EngineMetrics>>,
+    /// Tracks whether we've already recorded first-partial latency for current utterance.
+    first_partial_recorded: bool,
+    /// Tracks whether we've already recorded first-tts latency for current utterance.
+    first_tts_recorded: bool,
+    /// Tracks whether we've already recorded end-to-end latency for current utterance.
+    end_to_end_recorded: bool,
+    /// Timestamp when the current utterance ended (speech stop detected).
+    speech_ended_at_ns: Option<u64>,
 }
 
 impl CaptionPipeline {
@@ -122,6 +132,7 @@ impl CaptionPipeline {
         elevenlabs_tts_cfg: Option<&ElevenLabsTtsConfig>,
         minimax_tts_cfg: Option<&MiniMaxTtsConfig>,
         log_tx: Option<Sender<String>>,
+        metrics: Option<Arc<metrics::EngineMetrics>>,
     ) -> Result<Self> {
         log_and_eprint(
             &log_tx,
@@ -333,6 +344,11 @@ impl CaptionPipeline {
             max_partial_samples,
             overlap_tail_samples,
             skip_partial_if_busy: stt.skip_partial_if_busy,
+            metrics,
+            first_partial_recorded: false,
+            first_tts_recorded: false,
+            end_to_end_recorded: false,
+            speech_ended_at_ns: None,
         })
     }
 
@@ -438,6 +454,20 @@ impl CaptionPipeline {
                     self.utterance_buffer.clear();
                 }
                 self.last_partial_at = None;
+                // Record speech end timestamp for latency calculations.
+                self.speech_ended_at_ns = Some(timestamp_ns);
+            }
+
+            // New utterance detected — reset per-utterance state and record VAD latency.
+            if speech_active && self.speech_started_at_ns.is_none() {
+                self.reset_utterance_latency();
+                self.speech_started_at_ns = Some(timestamp_ns);
+                if let Some(ref metrics) = self.metrics {
+                    // VAD start latency: time from first audio in this utterance to detection.
+                    // Since we just detected it now, latency is approximately 0 relative to
+                    // this callback, but we can record a small estimate based on VAD window.
+                    metrics.record_vad_start_latency(32); // ~32ms for 512 samples @ 16kHz
+                }
             }
         }
 
@@ -480,6 +510,7 @@ impl CaptionPipeline {
     }
 
     fn drain_results(&mut self) {
+        let now_ns = now_ns();
         while let Ok(event) = self.result_rx.try_recv() {
             if event.timestamp_ns > self.last_event_at_ns {
                 self.last_event_at_ns = event.timestamp_ns;
@@ -500,11 +531,60 @@ impl CaptionPipeline {
                 // duplicate finals later.
                 self.last_emitted_text = Some(event.original.clone());
             }
+
+            // Latency tracking
+            if let Some(ref metrics) = self.metrics {
+                if !event.is_final && !self.first_partial_recorded {
+                    if let Some(start) = self.speech_started_at_ns {
+                        let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
+                        metrics.record_asr_first_partial(ms as u64);
+                        self.first_partial_recorded = true;
+                    }
+                }
+                if event.is_final {
+                    if let Some(start) = self.speech_started_at_ns {
+                        let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
+                        metrics.record_asr_final(ms as u64);
+                    }
+                    if event.translated.is_some() {
+                        if let Some(end) = self.speech_ended_at_ns {
+                            let ms = ((now_ns.saturating_sub(end)) / 1_000_000).max(1);
+                            metrics.record_mt_first_output(ms as u64);
+                        }
+                    }
+                }
+            }
+
             self.pending.push_back(event.to_json());
         }
         while let Ok(chunk) = self.audio_rx.try_recv() {
+            if let Some(ref metrics) = self.metrics {
+                if !self.first_tts_recorded {
+                    if let Some(end) = self.speech_ended_at_ns {
+                        let ms = ((now_ns.saturating_sub(end)) / 1_000_000).max(1);
+                        metrics.record_tts_first_audio(ms as u64);
+                    }
+                    self.first_tts_recorded = true;
+                }
+                if !self.end_to_end_recorded {
+                    if let Some(start) = self.speech_started_at_ns {
+                        let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
+                        metrics.record_end_to_end_first_audio(ms as u64);
+                    }
+                    self.end_to_end_recorded = true;
+                }
+            }
             self.pending_audio.push_back(chunk);
         }
+    }
+
+    /// Reset per-utterance latency tracking state. Call when a new utterance begins.
+    fn reset_utterance_latency(&mut self) {
+        self.first_partial_recorded = false;
+        self.first_tts_recorded = false;
+        self.end_to_end_recorded = false;
+        self.speech_started_at_ns = None;
+        self.speech_ended_at_ns = None;
     }
 }
 

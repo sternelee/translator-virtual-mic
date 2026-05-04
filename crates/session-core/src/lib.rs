@@ -410,7 +410,7 @@ impl EngineSession {
             stt.model_id, stt.model_dir, stt.vad_model_path
         ));
         let log_tx = self.log_tx.clone();
-        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref(), cosyvoice_tts.as_ref(), elevenlabs_tts.as_ref(), minimax_tts.as_ref(), log_tx) {
+        match CaptionPipeline::from_config(&stt, mt.as_ref(), tts.as_ref(), local_mt.as_ref(), cosyvoice_tts.as_ref(), elevenlabs_tts.as_ref(), minimax_tts.as_ref(), log_tx, Some(self.metrics.clone())) {
             Ok(pipeline) => {
                 self.log("[session-core] caption pipeline ready".to_string());
                 self.caption_pipeline = Some(pipeline);
