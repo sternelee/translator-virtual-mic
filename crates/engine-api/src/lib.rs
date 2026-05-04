@@ -573,6 +573,19 @@ pub extern "C" fn engine_take_next_caption_event(
 }
 
 #[no_mangle]
+pub extern "C" fn engine_has_pending_caption_events(handle: *mut EngineHandle) -> i32 {
+    with_handle(handle, |handle| {
+        let has = handle
+            .session
+            .lock()
+            .expect("session poisoned")
+            .has_pending_caption_events();
+        Ok(if has { 1 } else { 0 })
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
 pub extern "C" fn engine_take_next_log_line(
     handle: *mut EngineHandle,
     out_buf: *mut c_char,

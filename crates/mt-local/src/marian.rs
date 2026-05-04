@@ -178,11 +178,9 @@ impl MarianBackend {
                 .map_err(|e| MtLocalError::Inference(format!("dec_ids tensor: {e}")))?;
             let enc_mask_t = Tensor::from_array(enc_mask)
                 .map_err(|e| MtLocalError::Inference(format!("enc_mask tensor: {e}")))?;
-            let enc_h_arr = ArrayD::from_shape_vec(
-                IxDyn(&enc_shape),
-                encoder_hidden.iter().cloned().collect(),
-            )
-            .map_err(|e| MtLocalError::Inference(format!("enc_h reshape: {e}")))?;
+            let enc_h_arr =
+                ArrayD::from_shape_vec(IxDyn(&enc_shape), encoder_hidden.iter().cloned().collect())
+                    .map_err(|e| MtLocalError::Inference(format!("enc_h reshape: {e}")))?;
             let enc_h_t = Tensor::from_array(enc_h_arr)
                 .map_err(|e| MtLocalError::Inference(format!("enc_h tensor: {e}")))?;
 

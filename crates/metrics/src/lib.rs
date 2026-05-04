@@ -16,7 +16,11 @@ impl LatencyTracker {
 
     pub fn get_ms(&self) -> u64 {
         let v = self.last_ms.load(Ordering::Relaxed);
-        if v == Self::UNSET { 0 } else { v }
+        if v == Self::UNSET {
+            0
+        } else {
+            v
+        }
     }
 }
 
@@ -109,7 +113,7 @@ impl EngineMetrics {
                 "\"underrun_count\":{},",
                 "\"overflow_count\":{},",
                 "\"reconnect_count\":{},",
-                "\"fallback_count\":{}" ,
+                "\"fallback_count\":{}",
                 "}}"
             ),
             self.vad_start_latency_ms.get_ms(),

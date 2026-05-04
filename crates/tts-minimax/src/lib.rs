@@ -141,7 +141,10 @@ impl MiniMaxTtsClient {
                         .get("status_msg")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown error");
-                    return Err(MiniMaxTtsError::ApiError(format!("{}: {}", status_code, msg)));
+                    return Err(MiniMaxTtsError::ApiError(format!(
+                        "{}: {}",
+                        status_code, msg
+                    )));
                 }
             }
         }

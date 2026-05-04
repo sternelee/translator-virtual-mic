@@ -28,6 +28,7 @@ final class EngineRuntime {
     typealias TakeNextTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
     typealias IngestTranslationEventFn = @convention(c) (EngineHandleRef?, UnsafePointer<CChar>?) -> Int32
     typealias TakeNextCaptionEventFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
+    typealias HasPendingCaptionEventsFn = @convention(c) (EngineHandleRef?) -> Int32
     typealias TakeNextLogLineFn = @convention(c) (EngineHandleRef?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
     typealias LastErrorFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
     typealias MetricsJsonFn = @convention(c) (EngineHandleRef?) -> UnsafePointer<CChar>?
@@ -47,6 +48,7 @@ final class EngineRuntime {
     let takeNextTranslationEvent: TakeNextTranslationEventFn
     let ingestTranslationEvent: IngestTranslationEventFn
     let takeNextCaptionEvent: TakeNextCaptionEventFn
+    let hasPendingCaptionEvents: HasPendingCaptionEventsFn
     let takeNextLogLine: TakeNextLogLineFn
     let lastError: LastErrorFn
     let metricsJson: MetricsJsonFn
@@ -99,6 +101,7 @@ final class EngineRuntime {
             takeNextTranslationEvent: loadSymbol("engine_take_next_translation_event", as: TakeNextTranslationEventFn.self),
             ingestTranslationEvent: loadSymbol("engine_ingest_translation_event", as: IngestTranslationEventFn.self),
             takeNextCaptionEvent: loadSymbol("engine_take_next_caption_event", as: TakeNextCaptionEventFn.self),
+            hasPendingCaptionEvents: loadSymbol("engine_has_pending_caption_events", as: HasPendingCaptionEventsFn.self),
             takeNextLogLine: loadSymbol("engine_take_next_log_line", as: TakeNextLogLineFn.self),
             lastError: loadSymbol("engine_get_last_error", as: LastErrorFn.self),
             metricsJson: loadSymbol("engine_get_metrics_json", as: MetricsJsonFn.self),
@@ -154,6 +157,7 @@ final class EngineRuntime {
         takeNextTranslationEvent: TakeNextTranslationEventFn,
         ingestTranslationEvent: IngestTranslationEventFn,
         takeNextCaptionEvent: TakeNextCaptionEventFn,
+        hasPendingCaptionEvents: HasPendingCaptionEventsFn,
         takeNextLogLine: TakeNextLogLineFn,
         lastError: LastErrorFn,
         metricsJson: MetricsJsonFn,
@@ -174,6 +178,7 @@ final class EngineRuntime {
         self.takeNextTranslationEvent = takeNextTranslationEvent
         self.ingestTranslationEvent = ingestTranslationEvent
         self.takeNextCaptionEvent = takeNextCaptionEvent
+        self.hasPendingCaptionEvents = hasPendingCaptionEvents
         self.takeNextLogLine = takeNextLogLine
         self.lastError = lastError
         self.metricsJson = metricsJson

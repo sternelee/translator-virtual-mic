@@ -114,6 +114,11 @@ final class EngineBox {
         return String(cString: buffer)
     }
 
+    func hasPendingCaptionEvents() -> Bool {
+        guard let runtime, let handle else { return false }
+        return runtime.hasPendingCaptionEvents(handle) != 0
+    }
+
     func captionStateJSON() -> String {
         guard let runtime, let handle, let raw = runtime.captionStateJson(handle) else {
             return "{}"

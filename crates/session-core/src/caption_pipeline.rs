@@ -20,15 +20,18 @@ fn log_and_eprint(log_tx: &Option<Sender<String>>, msg: String) {
     }
 }
 
-use common::{CosyVoiceTtsConfig, ElevenLabsTtsConfig, EngineError, LocalMtConfig, LocalSttConfig, MiniMaxTtsConfig, MtConfig, Result, TtsConfig};
-use tts_cosyvoice::{CosyVoiceClient, CosyVoiceConfig};
-use tts_elevenlabs::{ElevenLabsTtsClient, ElevenLabsTtsConfig as ElTtsConfig};
-use tts_minimax::{MiniMaxTtsClient};
+use common::{
+    CosyVoiceTtsConfig, ElevenLabsTtsConfig, EngineError, LocalMtConfig, LocalSttConfig,
+    MiniMaxTtsConfig, MtConfig, Result, TtsConfig,
+};
 use mt_client::{MtClient, MtClientConfig};
 use mt_local::{load_backend as load_local_mt_backend, LocalMtBackend};
 use stt_local::audio::{stereo_to_mono, CachedResampler};
 use stt_local::vad::{Vad, VadConfig};
 use stt_local::{load_backend, load_tts_backend, TranscriberBackend, TtsBackend};
+use tts_cosyvoice::{CosyVoiceClient, CosyVoiceConfig};
+use tts_elevenlabs::{ElevenLabsTtsClient, ElevenLabsTtsConfig as ElTtsConfig};
+use tts_minimax::MiniMaxTtsClient;
 
 const VAD_CHUNK_FRAMES: usize = 512; // sherpa Silero default window
 
@@ -153,7 +156,10 @@ impl CaptionPipeline {
 
         let backend = load_backend(&stt.model_id, &stt.model_dir)
             .map_err(|e| EngineError::new(format!("load STT backend: {e}")))?;
-        log_and_eprint(&log_tx, format!("[caption_pipeline] STT backend loaded: {}", stt.model_id));
+        log_and_eprint(
+            &log_tx,
+            format!("[caption_pipeline] STT backend loaded: {}", stt.model_id),
+        );
 
         let mut vad_cfg = VadConfig::new(stt.vad_model_path.to_string_lossy().into_owned())
             .with_threshold(stt.vad_threshold);
@@ -201,7 +207,10 @@ impl CaptionPipeline {
                 let backend =
                     load_tts_backend(&cfg.model_id, &cfg.model_dir, cfg.speaker_id, cfg.speed)
                         .map_err(|e| EngineError::new(format!("load TTS backend: {e}")))?;
-                log_and_eprint(&log_tx, format!("[caption_pipeline] TTS backend loaded: {}", cfg.model_id));
+                log_and_eprint(
+                    &log_tx,
+                    format!("[caption_pipeline] TTS backend loaded: {}", cfg.model_id),
+                );
                 Some(backend)
             }
             _ => None,
@@ -213,7 +222,13 @@ impl CaptionPipeline {
                 let backend =
                     load_local_mt_backend(&cfg.model_id, &cfg.model_dir, &cfg.source_lang)
                         .map_err(|e| EngineError::new(format!("load local MT backend: {e}")))?;
-                log_and_eprint(&log_tx, format!("[caption_pipeline] local MT backend loaded: {}", cfg.model_id));
+                log_and_eprint(
+                    &log_tx,
+                    format!(
+                        "[caption_pipeline] local MT backend loaded: {}",
+                        cfg.model_id
+                    ),
+                );
                 Some(backend)
             }
             _ => None,
@@ -229,11 +244,20 @@ impl CaptionPipeline {
                 };
                 match CosyVoiceClient::new(cv_cfg) {
                     Ok(client) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] CosyVoice TTS client ready (endpoint={})", cfg.endpoint));
+                        log_and_eprint(
+                            &log_tx,
+                            format!(
+                                "[caption_pipeline] CosyVoice TTS client ready (endpoint={})",
+                                cfg.endpoint
+                            ),
+                        );
                         Some(client)
                     }
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] CosyVoice TTS init failed: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] CosyVoice TTS init failed: {e}"),
+                        );
                         None
                     }
                 }
@@ -262,11 +286,17 @@ impl CaptionPipeline {
                 };
                 match ElevenLabsTtsClient::new(el_cfg) {
                     Ok(client) => {
-                        log_and_eprint(&log_tx, "[caption_pipeline] ElevenLabs TTS client ready".to_string());
+                        log_and_eprint(
+                            &log_tx,
+                            "[caption_pipeline] ElevenLabs TTS client ready".to_string(),
+                        );
                         Some(client)
                     }
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] ElevenLabs TTS init failed: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] ElevenLabs TTS init failed: {e}"),
+                        );
                         None
                     }
                 }
@@ -276,18 +306,22 @@ impl CaptionPipeline {
 
         // Optional MiniMax TTS client (highest priority if enabled).
         let minimax_client: Option<MiniMaxTtsClient> = match minimax_tts_cfg {
-            Some(cfg) if cfg.enabled => {
-                match MiniMaxTtsClient::new(cfg) {
-                    Ok(client) => {
-                        log_and_eprint(&log_tx, "[caption_pipeline] MiniMax TTS client ready".to_string());
-                        Some(client)
-                    }
-                    Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] MiniMax TTS init failed: {e}"));
-                        None
-                    }
+            Some(cfg) if cfg.enabled => match MiniMaxTtsClient::new(cfg) {
+                Ok(client) => {
+                    log_and_eprint(
+                        &log_tx,
+                        "[caption_pipeline] MiniMax TTS client ready".to_string(),
+                    );
+                    Some(client)
                 }
-            }
+                Err(e) => {
+                    log_and_eprint(
+                        &log_tx,
+                        format!("[caption_pipeline] MiniMax TTS init failed: {e}"),
+                    );
+                    None
+                }
+            },
             _ => None,
         };
 
@@ -305,7 +339,7 @@ impl CaptionPipeline {
         let worker = thread::Builder::new()
             .name("caption-stt-worker".to_string())
             .spawn(move || {
-                    worker_loop(
+                worker_loop(
                     backend,
                     mt_client,
                     local_mt_backend,
@@ -498,6 +532,13 @@ impl CaptionPipeline {
         self.pending.pop_front()
     }
 
+    /// Returns true if there are caption events (or TTS audio) waiting to be
+    /// consumed.  A cheap check suitable for polling loops.
+    pub fn has_pending_events(&mut self) -> bool {
+        self.drain_results();
+        !self.pending.is_empty() || !self.pending_audio.is_empty()
+    }
+
     /// Drain synthesized audio chunks produced by the TTS worker.
     /// Call after `push_pcm` or `flush`; returns `None` when queue is empty.
     pub fn take_next_audio(&mut self) -> Option<AudioChunk> {
@@ -643,11 +684,17 @@ fn worker_loop(
         // );
         let original = match backend.transcribe(&samples, &language) {
             Ok(text) => {
-                log_and_eprint(&log_tx, format!("[caption_pipeline] worker: transcribed='{}'", text));
+                log_and_eprint(
+                    &log_tx,
+                    format!("[caption_pipeline] worker: transcribed='{}'", text),
+                );
                 text
             }
             Err(e) => {
-                log_and_eprint(&log_tx, format!("[caption_pipeline] worker: transcribe error: {}", e));
+                log_and_eprint(
+                    &log_tx,
+                    format!("[caption_pipeline] worker: transcribe error: {}", e),
+                );
                 worker_busy.store(false, Ordering::Relaxed);
                 continue;
             }
@@ -664,7 +711,10 @@ fn worker_loop(
                     Ok(t) if !t.trim().is_empty() => Some(t),
                     Ok(_) => None,
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] worker: local MT error: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] worker: local MT error: {e}"),
+                        );
                         None
                     }
                 }
@@ -680,7 +730,8 @@ fn worker_loop(
         // TTS priority: MiniMax > ElevenLabs > CosyVoice > sherpa-onnx.
         // Dedup: skip if candidate equals last synthesized text.
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
-        let has_tts = minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
+        let has_tts =
+            minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
         if has_tts
             && !tts_candidate.trim().is_empty()
             && tts_candidate.trim() != last_tts_text.trim()
@@ -696,7 +747,10 @@ fn worker_loop(
                     }
                     Ok(_) => None,
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] worker: MiniMax TTS error: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] worker: MiniMax TTS error: {e}"),
+                        );
                         None
                     }
                 }
@@ -711,7 +765,10 @@ fn worker_loop(
                     }
                     Ok(_) => None,
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] worker: ElevenLabs TTS error: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] worker: ElevenLabs TTS error: {e}"),
+                        );
                         None
                     }
                 }
@@ -728,7 +785,10 @@ fn worker_loop(
                     }
                     Ok(_) => None,
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] worker: CosyVoice TTS error: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] worker: CosyVoice TTS error: {e}"),
+                        );
                         None
                     }
                 }
@@ -744,7 +804,10 @@ fn worker_loop(
                         Some((samples, rate))
                     }
                     Err(e) => {
-                        log_and_eprint(&log_tx, format!("[caption_pipeline] worker: TTS error: {e}"));
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] worker: TTS error: {e}"),
+                        );
                         None
                     }
                 }
@@ -879,10 +942,16 @@ mod tests {
         assert!(should_synthesize, "first partial should synthesize");
         last_tts_text = text.to_string();
         let should_synthesize_again = text.trim() != last_tts_text.trim();
-        assert!(!should_synthesize_again, "identical partial should be skipped");
+        assert!(
+            !should_synthesize_again,
+            "identical partial should be skipped"
+        );
         // Simulate final segment: clear dedup state
         last_tts_text.clear();
         let should_synthesize_after_final = text.trim() != last_tts_text.trim();
-        assert!(should_synthesize_after_final, "after final reset, next partial should synthesize again");
+        assert!(
+            should_synthesize_after_final,
+            "after final reset, next partial should synthesize again"
+        );
     }
 }

@@ -129,12 +129,7 @@ fn pcm_i16_le_to_f32(raw: &[u8]) -> Vec<f32> {
 }
 
 /// Build a multipart/form-data body with fields: tts_text, prompt_text, prompt_wav.
-fn build_multipart(
-    boundary: &str,
-    tts_text: &str,
-    prompt_text: &str,
-    wav_bytes: &[u8],
-) -> Vec<u8> {
+fn build_multipart(boundary: &str, tts_text: &str, prompt_text: &str, wav_bytes: &[u8]) -> Vec<u8> {
     let mut body: Vec<u8> = Vec::new();
     append_text_field(&mut body, boundary, "tts_text", tts_text);
     append_text_field(&mut body, boundary, "prompt_text", prompt_text);
@@ -188,7 +183,10 @@ mod tests {
             prompt_wav_path: PathBuf::from("/tmp/ref.wav"),
             prompt_text: String::new(),
         };
-        assert!(matches!(CosyVoiceClient::new(cfg), Err(CosyVoiceError::Config(_))));
+        assert!(matches!(
+            CosyVoiceClient::new(cfg),
+            Err(CosyVoiceError::Config(_))
+        ));
     }
 
     #[test]
@@ -198,7 +196,10 @@ mod tests {
             prompt_wav_path: PathBuf::new(),
             prompt_text: String::new(),
         };
-        assert!(matches!(CosyVoiceClient::new(cfg), Err(CosyVoiceError::Config(_))));
+        assert!(matches!(
+            CosyVoiceClient::new(cfg),
+            Err(CosyVoiceError::Config(_))
+        ));
     }
 
     #[test]
