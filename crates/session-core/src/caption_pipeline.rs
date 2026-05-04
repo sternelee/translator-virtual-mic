@@ -61,6 +61,7 @@ enum WorkerJob {
 #[derive(Debug)]
 struct PostProcessJob {
     original: String,
+    is_final: bool,
     timestamp_ns: u64,
 }
 
@@ -722,13 +723,14 @@ fn stt_worker_loop(
             continue;
         }
 
-        // Hand final segments off to the post-processor for MT + TTS.
-        if is_final {
-            let _ = post_tx.send(PostProcessJob {
-                original: original.clone(),
-                timestamp_ns,
-            });
-        }
+        // Hand all transcriptions (partial + final) to the post-processor for
+        // MT.  Partials are translated in real time so the UI sees streaming
+        // translation; finals trigger both MT and TTS.
+        let _ = post_tx.send(PostProcessJob {
+            original: original.clone(),
+            is_final,
+            timestamp_ns,
+        });
 
         // Emit the raw STT caption immediately so the UI is never blocked.
         // The post-processor will emit a second event with the translation
@@ -749,8 +751,9 @@ fn stt_worker_loop(
     }
 }
 
-/// Post-processor worker: runs MT and TTS for final segments on a dedicated
-/// thread so the STT worker is not blocked.
+/// Post-processor worker: runs MT for every transcription (partial + final)
+/// and TTS only for finals.  Partial MT is debounced to avoid spamming the
+/// backend with single-character deltas.
 fn post_processor_loop(
     mt: Option<Arc<MtClient>>,
     local_mt: Option<Box<dyn LocalMtBackend>>,
@@ -766,40 +769,78 @@ fn post_processor_loop(
     log_tx: Option<Sender<String>>,
 ) {
     let mut last_tts_text = String::new();
+    let mut last_partial_original = String::new();
+    let mut last_partial_translation = String::new();
+
     while let Ok(job) = rx.recv() {
         let original = job.original;
         let timestamp_ns = job.timestamp_ns;
+        let is_final = job.is_final;
 
-        // MT
-        let translated = if let Some(ref lmt) = local_mt {
-            match lmt.translate(&original, &local_mt_target_lang) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                Ok(_) => None,
-                Err(e) => {
-                    log_and_eprint(
-                        &log_tx,
-                        format!("[caption_pipeline] post_processor: local MT error: {e}"),
-                    );
-                    None
-                }
-            }
+        // --- MT ---
+        // For partials: debounce — skip if identical to last translated partial
+        // or if the text is too short to be meaningful.
+        const MIN_PARTIAL_LEN: usize = 5;
+        let should_translate = if is_final {
+            true
         } else {
-            mt.as_ref()
-                .and_then(|client| client.translate(&original, &target_lang).ok())
-                .filter(|t| !t.trim().is_empty())
+            original.trim() != last_partial_original.trim()
+                && original.trim().len() >= MIN_PARTIAL_LEN
         };
 
-        // Emit the translated caption event.
+        let translated = if should_translate {
+            if let Some(ref lmt) = local_mt {
+                match lmt.translate(&original, &local_mt_target_lang) {
+                    Ok(t) if !t.trim().is_empty() => Some(t),
+                    Ok(_) => None,
+                    Err(e) => {
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] post_processor: local MT error: {e}"),
+                        );
+                        None
+                    }
+                }
+            } else {
+                mt.as_ref()
+                    .and_then(|client| client.translate(&original, &target_lang).ok())
+                    .filter(|t| !t.trim().is_empty())
+            }
+        } else if !is_final && original.trim() == last_partial_original.trim() {
+            // Re-use the last translated partial so the UI still gets a
+            // CaptionEvent with translation for this partial.
+            Some(last_partial_translation.clone())
+        } else {
+            None
+        };
+
+        // Emit the translated caption event for both partials and finals.
         if let Some(ref t) = translated {
             let _ = tx.send(CaptionEvent {
                 timestamp_ns,
                 original: original.clone(),
                 translated: Some(t.clone()),
-                is_final: true,
+                is_final,
             });
+
+            if !is_final {
+                last_partial_original = original.clone();
+                last_partial_translation = t.clone();
+            }
         }
 
-        // TTS priority: MiniMax > ElevenLabs > CosyVoice > sherpa-onnx.
+        // On a final segment, reset partial tracking so the next utterance
+        // starts fresh.
+        if is_final {
+            last_partial_original.clear();
+            last_partial_translation.clear();
+        }
+
+        // --- TTS: only for finals to avoid audio stuttering on every partial. ---
+        if !is_final {
+            continue;
+        }
+
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
         let has_tts =
             minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
