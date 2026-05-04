@@ -55,6 +55,15 @@ enum WorkerJob {
     Segment(SegmentJob),
 }
 
+/// Job handed from the STT worker to the post-processor thread.
+/// Post-processing (MT + TTS) is slow, so it runs on its own thread so the
+/// STT worker can keep chewing through new audio segments without blocking.
+#[derive(Debug)]
+struct PostProcessJob {
+    original: String,
+    timestamp_ns: u64,
+}
+
 /// Synthesized audio returned from the worker to the pipeline (and then to the
 /// session) so it can be pushed to the virtual-mic output ring.
 pub struct AudioChunk {
@@ -98,7 +107,8 @@ pub struct CaptionPipeline {
     job_tx: Option<Sender<WorkerJob>>,
     result_rx: Receiver<CaptionEvent>,
     audio_rx: Receiver<AudioChunk>,
-    worker: Option<JoinHandle<()>>,
+    stt_worker: Option<JoinHandle<()>>,
+    post_worker: Option<JoinHandle<()>>,
     pending: VecDeque<String>,
     pending_audio: VecDeque<AudioChunk>,
     last_event_at_ns: u64,
@@ -334,13 +344,16 @@ impl CaptionPipeline {
         let (result_tx, result_rx) = channel::<CaptionEvent>();
         let (audio_tx, audio_rx) = channel::<AudioChunk>();
 
-        let worker_busy_clone = worker_busy.clone();
-        let log_tx_clone = log_tx.clone();
-        let worker = thread::Builder::new()
-            .name("caption-stt-worker".to_string())
+        // Post-processor channel: STT worker → MT+TTS thread.
+        let (post_tx, post_rx) = channel::<PostProcessJob>();
+
+        // Spawn the MT+TTS post-processor first so it is ready to receive.
+        let log_tx_post = log_tx.clone();
+        let result_tx_post = result_tx.clone();
+        let post_worker = thread::Builder::new()
+            .name("caption-post-processor".to_string())
             .spawn(move || {
-                worker_loop(
-                    backend,
+                post_processor_loop(
                     mt_client,
                     local_mt_backend,
                     tts_backend,
@@ -349,14 +362,29 @@ impl CaptionPipeline {
                     minimax_client,
                     target_lang,
                     local_mt_target_lang,
-                    job_rx,
-                    result_tx,
+                    post_rx,
+                    result_tx_post,
                     audio_tx,
+                    log_tx_post,
+                )
+            })
+            .map_err(|e| EngineError::new(format!("spawn post-processor: {e}")))?;
+
+        let worker_busy_clone = worker_busy.clone();
+        let log_tx_clone = log_tx.clone();
+        let stt_worker = thread::Builder::new()
+            .name("caption-stt-worker".to_string())
+            .spawn(move || {
+                stt_worker_loop(
+                    backend,
+                    post_tx,
+                    result_tx,
+                    job_rx,
                     worker_busy_clone,
                     log_tx_clone,
                 )
             })
-            .map_err(|e| EngineError::new(format!("spawn worker: {e}")))?;
+            .map_err(|e| EngineError::new(format!("spawn stt worker: {e}")))?;
 
         Ok(Self {
             resampler,
@@ -365,7 +393,8 @@ impl CaptionPipeline {
             job_tx: Some(job_tx),
             result_rx,
             audio_rx,
-            worker: Some(worker),
+            stt_worker: Some(stt_worker),
+            post_worker: Some(post_worker),
             pending: VecDeque::new(),
             pending_audio: VecDeque::new(),
             last_event_at_ns: 0,
@@ -631,31 +660,28 @@ impl CaptionPipeline {
 
 impl Drop for CaptionPipeline {
     fn drop(&mut self) {
-        // Closing the sender lets the worker observe a hangup and exit.
+        // Closing the senders lets the workers observe a hangup and exit.
         self.job_tx = None;
-        if let Some(handle) = self.worker.take() {
+        if let Some(handle) = self.stt_worker.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.post_worker.take() {
             let _ = handle.join();
         }
     }
 }
 
-fn worker_loop(
+/// STT-only worker.  Transcribes audio and immediately forwards the raw
+/// caption event so the UI is not blocked by slow MT/TTS.  Final segments
+/// are additionally pushed to the post-processor for MT + TTS.
+fn stt_worker_loop(
     backend: Box<dyn TranscriberBackend>,
-    mt: Option<Arc<MtClient>>,
-    local_mt: Option<Box<dyn LocalMtBackend>>,
-    tts: Option<TtsBackend>,
-    cosyvoice: Option<CosyVoiceClient>,
-    elevenlabs: Option<ElevenLabsTtsClient>,
-    minimax: Option<MiniMaxTtsClient>,
-    target_lang: String,
-    local_mt_target_lang: String,
-    rx: Receiver<WorkerJob>,
+    post_tx: Sender<PostProcessJob>,
     tx: Sender<CaptionEvent>,
-    audio_tx: Sender<AudioChunk>,
+    rx: Receiver<WorkerJob>,
     worker_busy: Arc<AtomicBool>,
     log_tx: Option<Sender<String>>,
 ) {
-    let mut last_tts_text = String::new();
     while let Ok(job) = rx.recv() {
         let is_final = matches!(job, WorkerJob::Segment(_));
         let (samples, timestamp_ns, language) = match job {
@@ -668,32 +694,24 @@ fn worker_loop(
             continue;
         }
 
-        // Paraformer FSMN convolution requires at least a few frames of audio,
-        // otherwise it throws "Invalid input shape: {0}".  Skip clips shorter
-        // than 100 ms (1600 samples @ 16 kHz).
         const MIN_STT_SAMPLES: usize = 1600;
         if samples.len() < MIN_STT_SAMPLES {
             worker_busy.store(false, Ordering::Relaxed);
             continue;
         }
 
-        // eprintln!(
-        //     "[caption_pipeline] worker: transcribing {} samples (is_final={})",
-        //     samples.len(),
-        //     is_final
-        // );
         let original = match backend.transcribe(&samples, &language) {
             Ok(text) => {
                 log_and_eprint(
                     &log_tx,
-                    format!("[caption_pipeline] worker: transcribed='{}'", text),
+                    format!("[caption_pipeline] stt_worker: transcribed='{}'", text),
                 );
                 text
             }
             Err(e) => {
                 log_and_eprint(
                     &log_tx,
-                    format!("[caption_pipeline] worker: transcribe error: {}", e),
+                    format!("[caption_pipeline] stt_worker: transcribe error: {}", e),
                 );
                 worker_busy.store(false, Ordering::Relaxed);
                 continue;
@@ -704,31 +722,84 @@ fn worker_loop(
             continue;
         }
 
-        // MT runs only on final segments (local MT is too slow for partials).
-        let translated = if is_final {
-            if let Some(ref lmt) = local_mt {
-                match lmt.translate(&original, &local_mt_target_lang) {
-                    Ok(t) if !t.trim().is_empty() => Some(t),
-                    Ok(_) => None,
-                    Err(e) => {
-                        log_and_eprint(
-                            &log_tx,
-                            format!("[caption_pipeline] worker: local MT error: {e}"),
-                        );
-                        None
-                    }
+        // Hand final segments off to the post-processor for MT + TTS.
+        if is_final {
+            let _ = post_tx.send(PostProcessJob {
+                original: original.clone(),
+                timestamp_ns,
+            });
+        }
+
+        // Emit the raw STT caption immediately so the UI is never blocked.
+        // The post-processor will emit a second event with the translation
+        // (and any TTS audio) when it finishes.
+        let _ = tx.send(CaptionEvent {
+            timestamp_ns,
+            original,
+            translated: None,
+            is_final,
+        });
+        // We intentionally do NOT store worker_busy=false here for finals,
+        // because the post-processor may still be running.  The audio thread
+        // only checks worker_busy to decide whether to *send* a new partial;
+        // finals are always sent.  For partials we clear the flag below.
+        if !is_final {
+            worker_busy.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Post-processor worker: runs MT and TTS for final segments on a dedicated
+/// thread so the STT worker is not blocked.
+fn post_processor_loop(
+    mt: Option<Arc<MtClient>>,
+    local_mt: Option<Box<dyn LocalMtBackend>>,
+    tts: Option<TtsBackend>,
+    cosyvoice: Option<CosyVoiceClient>,
+    elevenlabs: Option<ElevenLabsTtsClient>,
+    minimax: Option<MiniMaxTtsClient>,
+    target_lang: String,
+    local_mt_target_lang: String,
+    rx: Receiver<PostProcessJob>,
+    tx: Sender<CaptionEvent>,
+    audio_tx: Sender<AudioChunk>,
+    log_tx: Option<Sender<String>>,
+) {
+    let mut last_tts_text = String::new();
+    while let Ok(job) = rx.recv() {
+        let original = job.original;
+        let timestamp_ns = job.timestamp_ns;
+
+        // MT
+        let translated = if let Some(ref lmt) = local_mt {
+            match lmt.translate(&original, &local_mt_target_lang) {
+                Ok(t) if !t.trim().is_empty() => Some(t),
+                Ok(_) => None,
+                Err(e) => {
+                    log_and_eprint(
+                        &log_tx,
+                        format!("[caption_pipeline] post_processor: local MT error: {e}"),
+                    );
+                    None
                 }
-            } else {
-                mt.as_ref()
-                    .and_then(|client| client.translate(&original, &target_lang).ok())
-                    .filter(|t| !t.trim().is_empty())
             }
         } else {
-            None
+            mt.as_ref()
+                .and_then(|client| client.translate(&original, &target_lang).ok())
+                .filter(|t| !t.trim().is_empty())
         };
 
+        // Emit the translated caption event.
+        if let Some(ref t) = translated {
+            let _ = tx.send(CaptionEvent {
+                timestamp_ns,
+                original: original.clone(),
+                translated: Some(t.clone()),
+                is_final: true,
+            });
+        }
+
         // TTS priority: MiniMax > ElevenLabs > CosyVoice > sherpa-onnx.
-        // Dedup: skip if candidate equals last synthesized text.
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
         let has_tts =
             minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
@@ -740,8 +811,8 @@ fn worker_loop(
                 match mm.synthesize(tts_candidate) {
                     Ok((samples, rate)) if !samples.is_empty() => {
                         eprintln!(
-                            "[caption_pipeline] worker: MiniMax TTS produced {} samples @ {}Hz (is_final={})",
-                            samples.len(), rate, is_final
+                            "[caption_pipeline] post_processor: MiniMax TTS produced {} samples @ {}Hz",
+                            samples.len(), rate
                         );
                         Some((samples, rate))
                     }
@@ -749,7 +820,7 @@ fn worker_loop(
                     Err(e) => {
                         log_and_eprint(
                             &log_tx,
-                            format!("[caption_pipeline] worker: MiniMax TTS error: {e}"),
+                            format!("[caption_pipeline] post_processor: MiniMax TTS error: {e}"),
                         );
                         None
                     }
@@ -758,8 +829,8 @@ fn worker_loop(
                 match el.synthesize(tts_candidate) {
                     Ok((samples, rate)) if !samples.is_empty() => {
                         eprintln!(
-                            "[caption_pipeline] worker: ElevenLabs TTS produced {} samples @ {}Hz (is_final={})",
-                            samples.len(), rate, is_final
+                            "[caption_pipeline] post_processor: ElevenLabs TTS produced {} samples @ {}Hz",
+                            samples.len(), rate
                         );
                         Some((samples, rate))
                     }
@@ -767,7 +838,7 @@ fn worker_loop(
                     Err(e) => {
                         log_and_eprint(
                             &log_tx,
-                            format!("[caption_pipeline] worker: ElevenLabs TTS error: {e}"),
+                            format!("[caption_pipeline] post_processor: ElevenLabs TTS error: {e}"),
                         );
                         None
                     }
@@ -776,10 +847,8 @@ fn worker_loop(
                 match cv.synthesize(tts_candidate) {
                     Ok((samples, rate)) if !samples.is_empty() => {
                         eprintln!(
-                            "[caption_pipeline] worker: CosyVoice TTS produced {} samples @ {}Hz (is_final={})",
-                            samples.len(),
-                            rate,
-                            is_final
+                            "[caption_pipeline] post_processor: CosyVoice TTS produced {} samples @ {}Hz",
+                            samples.len(), rate
                         );
                         Some((samples, rate))
                     }
@@ -787,7 +856,7 @@ fn worker_loop(
                     Err(e) => {
                         log_and_eprint(
                             &log_tx,
-                            format!("[caption_pipeline] worker: CosyVoice TTS error: {e}"),
+                            format!("[caption_pipeline] post_processor: CosyVoice TTS error: {e}"),
                         );
                         None
                     }
@@ -796,17 +865,15 @@ fn worker_loop(
                 match tts_backend.synthesize(tts_candidate) {
                     Ok((samples, rate)) => {
                         eprintln!(
-                            "[caption_pipeline] worker: sherpa TTS produced {} samples @ {}Hz (is_final={})",
-                            samples.len(),
-                            rate,
-                            is_final
+                            "[caption_pipeline] post_processor: sherpa TTS produced {} samples @ {}Hz",
+                            samples.len(), rate
                         );
                         Some((samples, rate))
                     }
                     Err(e) => {
                         log_and_eprint(
                             &log_tx,
-                            format!("[caption_pipeline] worker: TTS error: {e}"),
+                            format!("[caption_pipeline] post_processor: TTS error: {e}"),
                         );
                         None
                     }
@@ -824,25 +891,7 @@ fn worker_loop(
                 last_tts_text = tts_candidate.to_string();
             }
         }
-        if is_final {
-            last_tts_text.clear();
-        }
-
-        let event = CaptionEvent {
-            timestamp_ns,
-            original,
-            translated,
-            is_final,
-        };
-        // eprintln!(
-        //     "[caption_pipeline] worker: sending caption event (is_final={})",
-        //     is_final
-        // );
-        if tx.send(event).is_err() {
-            worker_busy.store(false, Ordering::Relaxed);
-            break;
-        }
-        worker_busy.store(false, Ordering::Relaxed);
+        last_tts_text.clear(); // reset per-utterance dedup
     }
 }
 
