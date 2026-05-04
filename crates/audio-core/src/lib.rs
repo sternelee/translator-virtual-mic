@@ -93,9 +93,9 @@ impl SampleRingBuffer {
         let available = write_idx.saturating_sub(read_idx) as usize;
         let to_read = requested_samples.min(available);
 
-        for i in 0..to_read {
-            let slot = (read_idx as usize) % self.capacity_samples;
-            out[i] = self.buffer[slot];
+        for slot in out.iter_mut().take(to_read) {
+            let buf_slot = (read_idx as usize) % self.capacity_samples;
+            *slot = self.buffer[buf_slot];
             read_idx = read_idx.wrapping_add(1);
         }
 

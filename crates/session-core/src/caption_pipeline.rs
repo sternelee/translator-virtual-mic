@@ -608,19 +608,19 @@ impl CaptionPipeline {
                 if !event.is_final && !self.first_partial_recorded {
                     if let Some(start) = self.speech_started_at_ns {
                         let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
-                        metrics.record_asr_first_partial(ms as u64);
+                        metrics.record_asr_first_partial(ms);
                         self.first_partial_recorded = true;
                     }
                 }
                 if event.is_final {
                     if let Some(start) = self.speech_started_at_ns {
                         let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
-                        metrics.record_asr_final(ms as u64);
+                        metrics.record_asr_final(ms);
                     }
                     if event.translated.is_some() {
                         if let Some(end) = self.speech_ended_at_ns {
                             let ms = ((now_ns.saturating_sub(end)) / 1_000_000).max(1);
-                            metrics.record_mt_first_output(ms as u64);
+                            metrics.record_mt_first_output(ms);
                         }
                     }
                 }
@@ -633,14 +633,14 @@ impl CaptionPipeline {
                 if !self.first_tts_recorded {
                     if let Some(end) = self.speech_ended_at_ns {
                         let ms = ((now_ns.saturating_sub(end)) / 1_000_000).max(1);
-                        metrics.record_tts_first_audio(ms as u64);
+                        metrics.record_tts_first_audio(ms);
                     }
                     self.first_tts_recorded = true;
                 }
                 if !self.end_to_end_recorded {
                     if let Some(start) = self.speech_started_at_ns {
                         let ms = ((now_ns.saturating_sub(start)) / 1_000_000).max(1);
-                        metrics.record_end_to_end_first_audio(ms as u64);
+                        metrics.record_end_to_end_first_audio(ms);
                     }
                     self.end_to_end_recorded = true;
                 }
