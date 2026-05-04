@@ -108,8 +108,8 @@ impl SharedOutputBuffer {
         write_u32(&mut mmap, SAMPLE_RATE_OFFSET, sample_rate);
         write_u32(&mut mmap, CAPACITY_FRAMES_OFFSET, capacity_frames as u32);
         write_u32(&mut mmap, RESERVED_OFFSET, 0);
-        atomic_u64_at(&mut mmap, WRITE_INDEX_OFFSET).store(0, Ordering::Release);
-        atomic_u64_at(&mut mmap, READ_INDEX_OFFSET).store(0, Ordering::Release);
+        atomic_u64_at(&mmap, WRITE_INDEX_OFFSET).store(0, Ordering::Release);
+        atomic_u64_at(&mmap, READ_INDEX_OFFSET).store(0, Ordering::Release);
         write_u64(&mut mmap, LAST_TIMESTAMP_OFFSET, 0);
 
         // Zero the sample region.

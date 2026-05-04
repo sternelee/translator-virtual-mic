@@ -497,7 +497,7 @@ impl CaptionPipeline {
             //     "[caption_pipeline] vad produced {} segments",
             //     segments.len()
             // );
-            for (_i, seg) in segments.iter().enumerate() {
+            for seg in segments.iter() {
                 // eprintln!("[caption_pipeline] segment {}: {} samples", i, seg.len());
                 if let Some(tx) = &self.job_tx {
                     let _ = tx.send(WorkerJob::Segment(SegmentJob {
