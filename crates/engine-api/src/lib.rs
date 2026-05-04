@@ -171,15 +171,19 @@ fn with_handle<T>(
     }
 }
 
+/// # Safety
+/// `config_json` must be a null-terminated UTF-8 string, or null.
 #[no_mangle]
-pub extern "C" fn engine_create(config_json: *const c_char) -> *mut EngineHandle {
+pub unsafe extern "C" fn engine_create(config_json: *const c_char) -> *mut EngineHandle {
     ensure_line_buffered_stderr();
     let config_json = read_optional_cstr(config_json);
     Box::into_raw(Box::new(EngineHandle::new(&config_json)))
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_destroy(handle: *mut EngineHandle) {
+pub unsafe extern "C" fn engine_destroy(handle: *mut EngineHandle) {
     if handle.is_null() {
         return;
     }
@@ -188,8 +192,10 @@ pub extern "C" fn engine_destroy(handle: *mut EngineHandle) {
     }
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_start(handle: *mut EngineHandle) -> i32 {
+pub unsafe extern "C" fn engine_start(handle: *mut EngineHandle) -> i32 {
     with_handle(handle, |handle| {
         handle
             .session
@@ -204,8 +210,10 @@ pub extern "C" fn engine_start(handle: *mut EngineHandle) -> i32 {
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_stop(handle: *mut EngineHandle) -> i32 {
+pub unsafe extern "C" fn engine_stop(handle: *mut EngineHandle) -> i32 {
     with_handle(handle, |handle| {
         handle.session.lock().expect("session poisoned").stop();
         handle.update_metrics_cache();
@@ -215,8 +223,11 @@ pub extern "C" fn engine_stop(handle: *mut EngineHandle) -> i32 {
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `lang` must be a null-terminated UTF-8 string, or null.
 #[no_mangle]
-pub extern "C" fn engine_set_target_language(
+pub unsafe extern "C" fn engine_set_target_language(
     handle: *mut EngineHandle,
     lang: *const c_char,
 ) -> i32 {
@@ -233,8 +244,10 @@ pub extern "C" fn engine_set_target_language(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_set_mode(handle: *mut EngineHandle, mode: i32) -> i32 {
+pub unsafe extern "C" fn engine_set_mode(handle: *mut EngineHandle, mode: i32) -> i32 {
     with_handle(handle, |handle| {
         let mode = EngineMode::from_i32(mode).ok_or_else(|| "invalid engine mode".to_string())?;
         handle
@@ -248,8 +261,10 @@ pub extern "C" fn engine_set_mode(handle: *mut EngineHandle, mode: i32) -> i32 {
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_enable_shared_output(
+pub unsafe extern "C" fn engine_enable_shared_output(
     handle: *mut EngineHandle,
     capacity_frames: i32,
     channels: i32,
@@ -276,8 +291,12 @@ pub extern "C" fn engine_enable_shared_output(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `samples` must point to at least `frame_count * channels` valid `f32`
+/// values.
 #[no_mangle]
-pub extern "C" fn engine_push_input_pcm(
+pub unsafe extern "C" fn engine_push_input_pcm(
     handle: *mut EngineHandle,
     samples: *const f32,
     frame_count: i32,
@@ -314,8 +333,12 @@ pub extern "C" fn engine_push_input_pcm(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `out_samples` must point to at least `max_frames * channels` writable
+/// `f32` slots.  `out_timestamp_ns` may be null.
 #[no_mangle]
-pub extern "C" fn engine_pull_output_pcm(
+pub unsafe extern "C" fn engine_pull_output_pcm(
     handle: *mut EngineHandle,
     out_samples: *mut f32,
     max_frames: i32,
@@ -352,8 +375,12 @@ pub extern "C" fn engine_pull_output_pcm(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `out_samples` must point to at least `max_frames * channels` writable
+/// `f32` slots.  `out_timestamp_ns` may be null.
 #[no_mangle]
-pub extern "C" fn engine_read_shared_output_pcm(
+pub unsafe extern "C" fn engine_read_shared_output_pcm(
     handle: *mut EngineHandle,
     out_samples: *mut f32,
     max_frames: i32,
@@ -387,8 +414,10 @@ pub extern "C" fn engine_read_shared_output_pcm(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_get_last_error(handle: *mut EngineHandle) -> *const c_char {
+pub unsafe extern "C" fn engine_get_last_error(handle: *mut EngineHandle) -> *const c_char {
     if handle.is_null() {
         return ptr::null();
     }
@@ -400,8 +429,10 @@ pub extern "C" fn engine_get_last_error(handle: *mut EngineHandle) -> *const c_c
         .as_ptr()
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_get_metrics_json(handle: *mut EngineHandle) -> *const c_char {
+pub unsafe extern "C" fn engine_get_metrics_json(handle: *mut EngineHandle) -> *const c_char {
     if handle.is_null() {
         return ptr::null();
     }
@@ -414,8 +445,10 @@ pub extern "C" fn engine_get_metrics_json(handle: *mut EngineHandle) -> *const c
         .as_ptr()
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_get_shared_output_path(handle: *mut EngineHandle) -> *const c_char {
+pub unsafe extern "C" fn engine_get_shared_output_path(handle: *mut EngineHandle) -> *const c_char {
     if handle.is_null() {
         return ptr::null();
     }
@@ -428,8 +461,11 @@ pub extern "C" fn engine_get_shared_output_path(handle: *mut EngineHandle) -> *c
         .as_ptr()
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `out_json` must point to at least `max_len` writable bytes.
 #[no_mangle]
-pub extern "C" fn engine_take_next_translation_event(
+pub unsafe extern "C" fn engine_take_next_translation_event(
     handle: *mut EngineHandle,
     out_json: *mut c_char,
     max_len: i32,
@@ -465,8 +501,11 @@ pub extern "C" fn engine_take_next_translation_event(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `event_json` must be a null-terminated UTF-8 string.
 #[no_mangle]
-pub extern "C" fn engine_ingest_translation_event(
+pub unsafe extern "C" fn engine_ingest_translation_event(
     handle: *mut EngineHandle,
     event_json: *const c_char,
 ) -> i32 {
@@ -488,8 +527,12 @@ pub extern "C" fn engine_ingest_translation_event(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_get_translation_state_json(handle: *mut EngineHandle) -> *const c_char {
+pub unsafe extern "C" fn engine_get_translation_state_json(
+    handle: *mut EngineHandle,
+) -> *const c_char {
     if handle.is_null() {
         return ptr::null();
     }
@@ -502,8 +545,12 @@ pub extern "C" fn engine_get_translation_state_json(handle: *mut EngineHandle) -
         .as_ptr()
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `samples` must point to at least `frame_count * channels` valid `f32`
+/// values.
 #[no_mangle]
-pub extern "C" fn engine_push_translated_pcm(
+pub unsafe extern "C" fn engine_push_translated_pcm(
     handle: *mut EngineHandle,
     samples: *const f32,
     frame_count: i32,
@@ -534,8 +581,11 @@ pub extern "C" fn engine_push_translated_pcm(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `out_json` must point to at least `max_len` writable bytes.
 #[no_mangle]
-pub extern "C" fn engine_take_next_caption_event(
+pub unsafe extern "C" fn engine_take_next_caption_event(
     handle: *mut EngineHandle,
     out_json: *mut c_char,
     max_len: i32,
@@ -572,8 +622,10 @@ pub extern "C" fn engine_take_next_caption_event(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_has_pending_caption_events(handle: *mut EngineHandle) -> i32 {
+pub unsafe extern "C" fn engine_has_pending_caption_events(handle: *mut EngineHandle) -> i32 {
     with_handle(handle, |handle| {
         let has = handle
             .session
@@ -585,8 +637,11 @@ pub extern "C" fn engine_has_pending_caption_events(handle: *mut EngineHandle) -
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
+/// `out_buf` must point to at least `max_len` writable bytes.
 #[no_mangle]
-pub extern "C" fn engine_take_next_log_line(
+pub unsafe extern "C" fn engine_take_next_log_line(
     handle: *mut EngineHandle,
     out_buf: *mut c_char,
     max_len: i32,
@@ -621,8 +676,10 @@ pub extern "C" fn engine_take_next_log_line(
     .unwrap_or(-1)
 }
 
+/// # Safety
+/// `handle` must be a valid pointer returned by `engine_create`, or null.
 #[no_mangle]
-pub extern "C" fn engine_get_caption_state_json(handle: *mut EngineHandle) -> *const c_char {
+pub unsafe extern "C" fn engine_get_caption_state_json(handle: *mut EngineHandle) -> *const c_char {
     if handle.is_null() {
         return ptr::null();
     }
@@ -643,21 +700,23 @@ mod tests {
     #[test]
     fn push_translated_pcm_rejects_null_samples() {
         let config = CString::new("{}").unwrap();
-        let handle = engine_create(config.as_ptr());
+        let handle = unsafe { engine_create(config.as_ptr()) };
         assert!(!handle.is_null());
-        assert_eq!(engine_start(handle), 0);
+        assert_eq!(unsafe { engine_start(handle) }, 0);
         assert_eq!(
-            engine_push_translated_pcm(handle, std::ptr::null(), 10, 1, 24_000, 0),
+            unsafe { engine_push_translated_pcm(handle, std::ptr::null(), 10, 1, 24_000, 0) },
             -1
         );
-        engine_destroy(handle);
+        unsafe { engine_destroy(handle) };
     }
 
     #[test]
     fn push_translated_pcm_rejects_null_handle() {
         let samples = vec![0.0f32; 10];
         assert_eq!(
-            engine_push_translated_pcm(std::ptr::null_mut(), samples.as_ptr(), 10, 1, 24_000, 0,),
+            unsafe {
+                engine_push_translated_pcm(std::ptr::null_mut(), samples.as_ptr(), 10, 1, 24_000, 0)
+            },
             -1
         );
     }
@@ -665,12 +724,13 @@ mod tests {
     #[test]
     fn push_translated_pcm_writes_to_output_ring() {
         let config = CString::new("{}").unwrap();
-        let handle = engine_create(config.as_ptr());
-        assert_eq!(engine_start(handle), 0);
+        let handle = unsafe { engine_create(config.as_ptr()) };
+        assert_eq!(unsafe { engine_start(handle) }, 0);
 
         let samples = vec![0.1f32; 240]; // 10ms at 24kHz
-        let result = engine_push_translated_pcm(handle, samples.as_ptr(), 240, 1, 24_000, 0);
+        let result =
+            unsafe { engine_push_translated_pcm(handle, samples.as_ptr(), 240, 1, 24_000, 0) };
         assert_eq!(result, 0, "expected success");
-        engine_destroy(handle);
+        unsafe { engine_destroy(handle) };
     }
 }
