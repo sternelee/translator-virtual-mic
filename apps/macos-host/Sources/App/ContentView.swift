@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 private func langDisplayName(_ code: String) -> String {
     switch code {
@@ -446,43 +447,140 @@ struct ContentView: View {
             }
             .navigationTitle("Translator Virtual Mic")
         } detail: {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(viewModel.microphonePermissionGranted ? "Microphone Access Ready" : "Microphone Access Pending")
-                    .font(.headline)
-                Text("Logs")
-                    .font(.title3)
-                if !viewModel.sharedOutputPath.isEmpty {
-                    Text(viewModel.sharedOutputPath)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-                Text(viewModel.sharedBufferStatusText)
+            DetailPanel(viewModel: viewModel)
+        }
+    }
+}
+
+// MARK: - Detail Panel
+
+private struct DetailPanel: View {
+    @ObservedObject var viewModel: AppViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(viewModel.microphonePermissionGranted ? "Microphone Access Ready" : "Microphone Access Pending")
+                .font(.headline)
+            Text("Logs")
+                .font(.title3)
+            if !viewModel.sharedOutputPath.isEmpty {
+                Text(viewModel.sharedOutputPath)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
-                if !viewModel.currentCaption.isEmpty {
-                    Text(viewModel.currentCaption)
-                        .font(.title2)
-                        .textSelection(.enabled)
-                }
-                Text(viewModel.captionStateJSON)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                Text(viewModel.translationStateJSON)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                Text(viewModel.metricsJSON)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(viewModel.logLines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+            }
+            Text(viewModel.sharedBufferStatusText)
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+
+            if viewModel.selectedTranslationProvider == .appleTranslation {
+                appleTranslationSection
+            } else {
+                standardCaptionSection
+            }
+
+            Text(viewModel.captionStateJSON)
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+            Text(viewModel.translationStateJSON)
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+            Text(viewModel.metricsJSON)
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(viewModel.logLines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .padding()
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private var standardCaptionSection: some View {
+        if !viewModel.currentCaption.isEmpty {
+            Text(viewModel.currentCaption)
+                .font(.title2)
+                .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private var appleTranslationSection: some View {
+        if #available(macOS 15.0, *) {
+            AppleTranslationView(viewModel: viewModel)
+        } else {
+            Text("Apple Translation requires macOS 15+")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+}
+
+// MARK: - Apple Translation View (macOS 15+)
+
+@available(macOS 15.0, *)
+private struct AppleTranslationView: View {
+    @ObservedObject var viewModel: AppViewModel
+    @State private var config: TranslationSession.Configuration?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !viewModel.currentCaption.isEmpty {
+                Text("Original")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(viewModel.currentCaption)
+                    .font(.title3)
+                    .textSelection(.enabled)
+
+                if !viewModel.appleTranslatedCaption.isEmpty {
+                    Divider()
+                    Text("Translated")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(viewModel.appleTranslatedCaption)
+                        .font(.title2)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .onAppear {
+            let source = Locale.Language(identifier: appleSourceLang)
+            let target = Locale.Language(identifier: appleTargetLang)
+            config = TranslationSession.Configuration(source: source, target: target)
+        }
+        .onChange(of: viewModel.currentCaption) { _, newValue in
+            viewModel.appleTranslationSource = newValue
+            config?.invalidate()
+        }
+        .translationTask(config) { session in
+            guard !viewModel.appleTranslationSource.isEmpty else { return }
+            do {
+                let response = try await session.translate(viewModel.appleTranslationSource)
+                viewModel.appleTranslatedCaption = response.targetText
+            } catch {
+                viewModel.appleTranslatedCaption = viewModel.appleTranslationSource
+            }
+        }
+    }
+
+    private var appleSourceLang: String {
+        switch viewModel.targetLanguage {
+        case "zh": return "en-US"
+        case "ja": return "en-US"
+        default: return "zh-Hans"
+        }
+    }
+
+    private var appleTargetLang: String {
+        switch viewModel.targetLanguage {
+        case "zh": return "zh-Hans"
+        case "ja": return "ja-JP"
+        default: return "en-US"
         }
     }
 }

@@ -49,21 +49,23 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
     case azureVoiceLive = "azure_voice_live"
     case elevenLabs = "eleven_labs"
     case localCaption = "local_caption"
+    case appleTranslation = "apple_translation"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .none:
-            "Off"
-        case .openAIRealtime:
-            "OpenAI Realtime"
-        case .azureVoiceLive:
-            "Azure Voice Live"
-        case .elevenLabs:
-            "ElevenLabs"
-        case .localCaption:
-            "Local Caption"
+        case .none: return "Off"
+        case .openAIRealtime: return "OpenAI Realtime"
+        case .azureVoiceLive: return "Azure Voice Live"
+        case .elevenLabs: return "ElevenLabs"
+        case .localCaption: return "Local Caption"
+        case .appleTranslation:
+            if #available(macOS 15.0, *) {
+                return "Apple Translation (On-Device)"
+            } else {
+                return "Apple Translation (macOS 15+ required)"
+            }
         }
     }
 }
@@ -87,6 +89,10 @@ final class AppViewModel: ObservableObject {
     @Published var translationStateJSON: String = "{}"
     @Published var currentCaption: String = ""
     @Published var captionStateJSON: String = "{}"
+
+    // Apple Translation (macOS 15+)
+    @Published var appleTranslationSource: String = ""
+    @Published var appleTranslatedCaption: String = ""
     @Published var pluginInstalled: Bool = PluginInstaller.isInstalled()
     @Published var pluginInstallInProgress: Bool = false
     @Published var pluginInstallError: String = ""
@@ -129,6 +135,24 @@ final class AppViewModel: ObservableObject {
     private var ttsDownloadCancellable: AnyCancellable?
     private var sharedBufferMonitorTask: Task<Void, Never>?
     private var lastSharedBufferSnapshot: SharedBufferMonitorSnapshot = .missing
+
+    /// Source language code for Apple Translation API (BCP-47).
+    private var sourceLanguageForTranslation: String {
+        switch targetLanguage {
+        case "zh": return "en-US"
+        case "ja": return "en-US"
+        default: return "zh-Hans"
+        }
+    }
+
+    /// Target language code for Apple Translation API (BCP-47).
+    private var targetLanguageForTranslation: String {
+        switch targetLanguage {
+        case "zh": return "zh-Hans"
+        case "ja": return "ja-JP"
+        default: return "en-US"
+        }
+    }
 
     init() {
         refreshDevices()
@@ -236,7 +260,7 @@ final class AppViewModel: ObservableObject {
 
         let engineMode: EngineMode = switch selectedTranslationProvider {
         case .none: .bypass
-        case .localCaption: .captionOnly
+        case .localCaption, .appleTranslation: .captionOnly
         default: .translate
         }
         _ = engine.setTargetLanguage(targetLanguage)
@@ -307,10 +331,20 @@ final class AppViewModel: ObservableObject {
         if !sharedOutputPath.isEmpty {
             appendLog("Shared output file: \(sharedOutputPath)")
         }
-        if selectedTranslationProvider == .localCaption {
+        switch selectedTranslationProvider {
+        case .localCaption:
             captionService.start(engine: engine)
             appendLog("Local caption service started")
-        } else {
+        case .appleTranslation:
+            captionService.start(engine: engine)
+            if #available(macOS 15.0, *) {
+                appleTranslationSource = ""
+                appleTranslatedCaption = ""
+                appendLog("Apple Translation ready: \(sourceLanguageForTranslation) → \(targetLanguageForTranslation)")
+            } else {
+                appendLog("Apple Translation requires macOS 15+")
+            }
+        default:
             startTranslationService(using: engine)
         }
         startSharedBufferMonitor()
@@ -322,6 +356,8 @@ final class AppViewModel: ObservableObject {
         openAIRealtimeService.stop()
         elevenLabsPipelineService.stop()
         captionService.stop()
+        appleTranslationSource = ""
+        appleTranslatedCaption = ""
         stopSharedBufferMonitor()
         guard let engine else { return }
         _ = engine.stop()
@@ -448,7 +484,7 @@ final class AppViewModel: ObservableObject {
 
     private func startTranslationService(using engine: EngineBox) {
         switch selectedTranslationProvider {
-        case .none, .localCaption:
+        case .none, .localCaption, .appleTranslation:
             return
         case .azureVoiceLive:
             startAzureVoiceLive(using: engine)
