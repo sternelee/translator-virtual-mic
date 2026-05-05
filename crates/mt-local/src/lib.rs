@@ -15,12 +15,14 @@
 //! Same file layout; model_id starts with `"nllb-"`.
 //! Source/target lang codes use NLLB BCP-47 (e.g. `"zho_Hans"`, `"eng_Latn"`).
 
+pub mod madlad;
 pub mod marian;
 pub mod registry;
 
 use std::path::Path;
 use thiserror::Error;
 
+pub use madlad::MadladBackend;
 pub use marian::MarianBackend;
 
 #[derive(Debug, Error)]
@@ -60,6 +62,13 @@ pub fn load_backend(
         "[mt-local] load_backend: model_id={model_id} model_dir={model_dir:?} src_lang={src_lang}"
     );
     let dir = model_dir.join(model_id);
+
+    // MadLad models use a Python subprocess backend (mlx-lm or transformers).
+    if model_id.starts_with("madlad") || model_id.starts_with("google/madlad") {
+        let backend = madlad::MadladBackend::new(model_id, &dir)?;
+        return Ok(Box::new(backend));
+    }
+
     let backend = marian::MarianBackend::new(model_id, &dir, src_lang)?;
     Ok(Box::new(backend))
 }

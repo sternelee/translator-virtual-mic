@@ -253,7 +253,7 @@ impl MarianBackend {
                     .get(nllb_tag.as_str())
                     .map(|&id| id as i64)
             }
-            MtModelFamily::OpusMt => None,
+            MtModelFamily::OpusMt | MtModelFamily::Madlad400 => None,
         }
     }
 

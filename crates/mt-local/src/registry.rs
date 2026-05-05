@@ -6,6 +6,8 @@ pub enum MtModelFamily {
     OpusMt,
     /// Meta NLLB-200 (multilingual, single model)
     Nllb200,
+    /// Google MadLad-400 (multilingual, T5-based)
+    Madlad400,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,13 @@ pub static ALL_MODELS: &[MtModelInfo] = &[
         src_lang: "multilingual",
         tgt_lang: "multilingual",
         description: "Meta NLLB-200 distilled 1.3B (multilingual)",
+    },
+    MtModelInfo {
+        id: "google/madlad400-3b-mt",
+        family: MtModelFamily::Madlad400,
+        src_lang: "multilingual",
+        tgt_lang: "multilingual",
+        description: "Google MadLad-400 3B-MT (400+ languages, mlx-lm/transformers)",
     },
 ];
 
