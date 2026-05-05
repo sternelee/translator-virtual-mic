@@ -63,6 +63,36 @@ struct ContentView: View {
                         Button("Start") { viewModel.startEngine() }
                         Button("Stop") { viewModel.stopEngine() }
                     }
+
+                    // Plugin installer
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(viewModel.pluginInstalled ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(viewModel.pluginInstalled ? "Virtual Mic Driver Installed" : "Virtual Mic Driver Missing")
+                            .font(.caption)
+                        Spacer()
+                        if viewModel.pluginInstallInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else if viewModel.pluginInstalled {
+                            Button("Uninstall") {
+                                viewModel.uninstallPlugin()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                        } else {
+                            Button("Install Driver") {
+                                viewModel.installPlugin()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    if !viewModel.pluginInstallError.isEmpty {
+                        Text(viewModel.pluginInstallError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 if viewModel.selectedTranslationProvider == .localCaption {

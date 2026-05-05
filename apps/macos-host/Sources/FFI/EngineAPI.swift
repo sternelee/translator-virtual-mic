@@ -116,31 +116,48 @@ final class EngineRuntime {
         var candidates: [String] = []
         let fm = FileManager.default
 
+        // 1. Explicit env override (highest priority)
         if let envPath = ProcessInfo.processInfo.environment["TRANSLATOR_ENGINE_DYLIB"], !envPath.isEmpty {
             candidates.append(envPath)
         }
 
-        let cwd = fm.currentDirectoryPath
-        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("target/debug/libengine_api.dylib").path)
-        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("../../../target/debug/libengine_api.dylib").path)
-
+        // 2. Adjacent to the app bundle executable (packaged builds)
         if let executableURL = Bundle.main.executableURL {
             let executableDir = executableURL.deletingLastPathComponent()
+            // Same directory as executable (package-app.sh copies here)
             candidates.append(executableDir.appendingPathComponent("libengine_api.dylib").path)
-            candidates.append(executableDir.appendingPathComponent("../libengine_api.dylib").standardized.path)
-            candidates.append(executableDir.appendingPathComponent("../../../libengine_api.dylib").standardized.path)
+            // Frameworks directory
+            candidates.append(executableDir.appendingPathComponent("../Frameworks/libengine_api.dylib").standardized.path)
+            // Repo-relative from bundled app: MyApp.app/Contents/MacOS → repo root
             candidates.append(executableDir.appendingPathComponent("../../../../../target/debug/libengine_api.dylib").standardized.path)
+            candidates.append(executableDir.appendingPathComponent("../../../../../target/release/libengine_api.dylib").standardized.path)
         }
 
+        // 3. Current working directory (running from repo root)
+        let cwd = fm.currentDirectoryPath
+        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("target/debug/libengine_api.dylib").path)
+        candidates.append(URL(fileURLWithPath: cwd).appendingPathComponent("target/release/libengine_api.dylib").path)
+
+        // 4. Swift build output path (when running .build/debug/TranslatorVirtualMicHost)
+        if let executableURL = Bundle.main.executableURL {
+            let executableDir = executableURL.deletingLastPathComponent()
+            candidates.append(executableDir.appendingPathComponent("../../../target/debug/libengine_api.dylib").standardized.path)
+            candidates.append(executableDir.appendingPathComponent("../../../target/release/libengine_api.dylib").standardized.path)
+            candidates.append(executableDir.appendingPathComponent("../libengine_api.dylib").standardized.path)
+        }
+
+        // 5. Source-relative fallback (development builds from Xcode / swift build)
         let sourceFileURL = URL(fileURLWithPath: #filePath)
         let repoRoot = sourceFileURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+            .deletingLastPathComponent()  // FFI
+            .deletingLastPathComponent()  // Sources
+            .deletingLastPathComponent()  // macos-host
+            .deletingLastPathComponent()  // apps
+            .deletingLastPathComponent()  // repo root
         candidates.append(repoRoot.appendingPathComponent("target/debug/libengine_api.dylib").path)
+        candidates.append(repoRoot.appendingPathComponent("target/release/libengine_api.dylib").path)
 
+        // Remove duplicates while preserving order
         return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
     }
 

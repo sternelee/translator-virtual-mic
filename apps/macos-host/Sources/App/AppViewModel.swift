@@ -87,6 +87,9 @@ final class AppViewModel: ObservableObject {
     @Published var translationStateJSON: String = "{}"
     @Published var currentCaption: String = ""
     @Published var captionStateJSON: String = "{}"
+    @Published var pluginInstalled: Bool = PluginInstaller.isInstalled()
+    @Published var pluginInstallInProgress: Bool = false
+    @Published var pluginInstallError: String = ""
     @Published var selectedLocalSttModelId: String = "paraformer-zh"
     @Published var localSttModelDownloadState: DownloadState = .idle
     @Published var selectedLocalMtModelId: String = "opus-mt-zh-en"
@@ -138,6 +141,50 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 self.microphonePermissionGranted = granted
                 self.appendLog(granted ? "Microphone permission granted" : "Microphone permission denied")
+            }
+        }
+    }
+
+    func installPlugin() {
+        guard !pluginInstallInProgress else { return }
+        pluginInstallInProgress = true
+        pluginInstallError = ""
+        appendLog("Installing TranslatorVirtualMic driver…")
+        PluginInstaller.install { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pluginInstallInProgress = false
+                switch result {
+                case .success:
+                    self.pluginInstalled = PluginInstaller.isInstalled()
+                    self.appendLog("Driver installed successfully. CoreAudio reloaded.")
+                    self.refreshDevices()
+                case .failure(let error):
+                    self.pluginInstallError = error.localizedDescription
+                    self.appendLog("Driver install failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func uninstallPlugin() {
+        guard !pluginInstallInProgress else { return }
+        pluginInstallInProgress = true
+        pluginInstallError = ""
+        appendLog("Uninstalling TranslatorVirtualMic driver…")
+        PluginInstaller.uninstall { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pluginInstallInProgress = false
+                switch result {
+                case .success:
+                    self.pluginInstalled = PluginInstaller.isInstalled()
+                    self.appendLog("Driver uninstalled. CoreAudio reloaded.")
+                    self.refreshDevices()
+                case .failure(let error):
+                    self.pluginInstallError = error.localizedDescription
+                    self.appendLog("Driver uninstall failed: \(error.localizedDescription)")
+                }
             }
         }
     }
