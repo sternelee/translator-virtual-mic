@@ -67,15 +67,40 @@
 
 ## STT (语音识别)
 
-> STT 调研结果待补充。
-
 当前在用: **sherpa-onnx** (Paraformer, Moonshine, FireRedASR, Zipformer CTC)
 
-候选方向:
-- **Whisper MLX** — MLX 框架原生优化
-- **Whisper.cpp** — CoreML encoder + Metal GPU
-- **Apple Speech** (SFSpeechRecognizer) — 零额外体积，原生流式
-- **Moonshine MLX** — 比 Whisper 快 5x
+### 生产级推荐
+
+| 优先级 | 方案 | 流式 | RTF (Apple Silicon) | 中文 | 日文 | 模型大小 | 许可证 |
+|--------|------|------|---------------------|------|------|---------|--------|
+| **1** | **WhisperKit** (Argmax) | ✅ 真流式，0.46s 假设延迟 | ~0.1-0.3x | ✅ | ✅ | 626MB (large-v3) | MIT |
+| **2** | **sherpa-onnx 2025 Zipformer** | ✅ 真流式 | 0.15-0.46x | ✅ (专用) | ❌* | 163-736MB | Apache 2.0 |
+| **3** | **Qwen3-ASR MLX** | ✅ KV-cache 流式 | 0.02-0.08x | ✅ | ✅ | 1.2-3.4GB | Apache 2.0 |
+
+*shpera-onnx 没有专用日文流式模型，只有离线 Zipformer-ReazonSpeech。
+
+### 值得关注
+
+| 方案 | 状态 | 评价 |
+|------|------|------|
+| **Lightning Whisper MLX** | [mustafaaljadery/lightning-whisper-mlx](https://github.com/mustafaaljadery/lightning-whisper-mlx) | Apple Silicon 上最快的 Whisper，**但无真流式**，只能 chunk 处理 |
+| **Apple SpeechAnalyzer** | macOS 26+ (WWDC 2025) | 原生零体积，真流式，但 macOS 26 才可用 |
+| **whisper.cpp** | [ggml/whisper.cpp](https://github.com/ggml/whisper.cpp) | 跨平台成熟，CoreML encoder 支持，但比 WhisperKit/MLX 慢，**无真流式** |
+
+### 不建议
+
+- **Moonshine** — 仅支持英文，无法用于中日翻译场景
+- **Canary-1B (NVIDIA)** — 流式不稳定（20-30s 后 stale），无 Apple Silicon 优化，CC-BY-NC 非商业许可
+- **ONNX Runtime + CoreML EP** — 官方 macOS arm64 仅支持 CPU backend，社区版性能差
+- **FireRedASR** — 仅支持离线推理，无法流式
+
+### 架构建议
+
+**方案 A (最低摩擦)** — 升级 sherpa-onnx 到 2025 中文流式 Zipformer，日文用离线模型 + VAD 模拟流式。
+
+**方案 B (最佳流式质量)** — Swift host 集成 **WhisperKit**，单模型覆盖中日英三语真流式，通过现有 FFI 传文本到 Rust engine。
+
+**方案 C (推荐混合)** — 中文用 sherpa-onnx 2025 Zipformer (Rust 层，最轻最快)，日文+英文用 WhisperKit (Swift 层，真流式)。
 
 ---
 
