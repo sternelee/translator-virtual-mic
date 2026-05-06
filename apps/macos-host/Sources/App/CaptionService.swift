@@ -8,6 +8,9 @@ final class CaptionService: ObservableObject {
     @Published var currentCaption: String = ""
     @Published var captionStateJSON: String = "{}"
 
+    /// Called on the MainActor when a final caption with a non-empty translation arrives.
+    var onFinalTranslation: ((String) -> Void)?
+
     private weak var engine: EngineBox?
     private var pollTask: Task<Void, Never>?
 
@@ -24,9 +27,14 @@ final class CaptionService: ObservableObject {
                           !Task.isCancelled {
                         let text = Self.extractText(from: eventJSON) ?? eventJSON
                         let state = engine.captionStateJSON()
+                        let isFinal = Self.extractIsFinal(from: eventJSON) ?? false
+                        let translation = Self.extractTranslation(from: eventJSON)
                         await MainActor.run {
                             self.currentCaption = text
                             self.captionStateJSON = state
+                            if isFinal, let t = translation, !t.isEmpty {
+                                self.onFinalTranslation?(t)
+                            }
                         }
                         fputs("[Caption] \(text)\n", stderr)
                     }
@@ -57,5 +65,21 @@ final class CaptionService: ObservableObject {
             return translation
         }
         return dict["text"] as? String
+    }
+
+    private static func extractIsFinal(from json: String) -> Bool? {
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return dict["is_final"] as? Bool
+    }
+
+    private static func extractTranslation(from json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return dict["translation"] as? String
     }
 }

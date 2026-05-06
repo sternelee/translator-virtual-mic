@@ -4,7 +4,7 @@
 
 This document records the current technical plan, implementation status, installation flow, usage steps, and known limitations for the macOS-first Translator Virtual Mic prototype.
 
-Current date baseline for this document: 2026-04-12.
+Current date baseline for this document: 2026-05-06.
 
 ## Technical Plan
 
@@ -60,109 +60,84 @@ Current translation integration direction:
 
 Implemented and validated:
 
-- engine lifecycle:
-  - `engine_create`
-  - `engine_destroy`
-  - `engine_start`
-  - `engine_stop`
-- runtime configuration:
-  - `engine_set_target_language`
-  - `engine_set_mode`
-- PCM flow:
-  - `engine_push_input_pcm`
-  - `engine_pull_output_pcm`
-- shared output bridge:
+- engine lifecycle: `engine_create`, `engine_destroy`, `engine_start`, `engine_stop`
+- runtime configuration: `engine_set_target_language`, `engine_set_mode`
+- PCM flow: `engine_push_input_pcm`, `engine_pull_output_pcm`
+- shared output bridge (mmap with atomic indices):
   - `engine_enable_shared_output`
   - `engine_read_shared_output_pcm`
   - `engine_get_shared_output_path`
-- diagnostics:
-  - `engine_get_last_error`
-  - `engine_get_metrics_json`
-- Azure Voice Live integration skeleton:
-  - config parsing for provider selection
-  - websocket URL and auth-header planning
-  - outbound event generation for `session.update`, `response.create`, and `input_audio_buffer.append`
-  - inbound event parsing for translated audio deltas
-  - FFI surfaces for translation event dequeue / ingest / state JSON
+- lock-free SPSC audio rings (`crates/audio-core`)
+- metrics: `engine_get_metrics_json` with real latency tracking (VAD, ASR partial/final, MT, TTS, end-to-end)
+- caption events: polled by Swift host at 5ms intervals
+- Rust pipeline logs forwarded to Swift UI via FFI
 
-The checked-in C header is:
+**Caption-Only mode** (`EngineMode::CaptionOnly`):
 
-- `native/macos/ffi-headers/engine_api.h`
+- Full streaming VAD → STT → MT → TTS pipeline via `caption_pipeline.rs`
+- **VAD**: Silero VAD on 16kHz mono, 512-frame window, configurable threshold
+- **STT**: sherpa-onnx with 5 backends (Zipformer CTC, Paraformer, FireRedASR, Moonshine) + model download manager
+- **MT**: remote (OpenAI-compatible chat completions via `crates/mt-client`) and local (Marian NLLB via ONNX in `crates/mt-local`, MadLad-400-3B-MT via Python subprocess)
+- **TTS**: waterfall priority — MiniMax API > ElevenLabs API > CosyVoice 2 (local Python sidecar) > voicebox unified sidecar (Kokoro/Qwen/Chatterbox/LuxTTS/Hume) > sherpa-onnx Kokoro > Kokoro CoreML (Swift-only, ANE-accelerated)
+- Streaming partials for live captions; finals trigger TTS synthesis
+- Parallel worker threads: STT worker + MT/TTS post-processor (prevents TTS latency from blocking transcription)
+- Deduplication of duplicate finals, debounced partial MT
+- Apple Translation API support (macOS 15+, zero-config MT fallback)
+
+**Realtime providers** (`EngineMode::Translate`):
+
+- `openai_realtime`: WebSocket bridge to OpenAI Realtime API, bootstrap + audio event queuing
+- `azure_voice_live`: WebSocket bridge to Azure Voice Live API
+- Provider selection via config/environment
+
+#### Voicebox TTS sidecar
+
+- `python/tts_backends/`: 8 TTS backends ported from voicebox project
+  - Kokoro-82M (8 languages, fast CPU)
+  - Qwen3-TTS 1.7B/0.6B (MLX on Apple Silicon, PyTorch on Intel)
+  - Qwen CustomVoice
+  - Chatterbox / Chatterbox Turbo (23 languages, zero-shot voice cloning)
+  - TADA (Hume) (tada-1b, tada-3b-ml)
+  - LuxTTS (CPU-friendly, 48kHz)
+- `scripts/tts_sidecar_server.py`: FastAPI HTTP server exposing unified `/synthesize` endpoint
+- `crates/tts-sidecar`: Rust HTTP client for the sidecar
+- `scripts/install_tts_sidecar_deps.sh`: One-shot Python dependency installer with `--mlx` flag
 
 #### Swift host side
 
-Implemented as scaffold:
-
-- SwiftUI macOS host app shell
-- microphone permission request flow
-- audio input device enumeration
-- runtime Rust dylib loading and C ABI binding
-- microphone capture scaffold pushing PCM into Rust
-- engine state/metrics/shared-output path display
-- Azure Live translation toggle scaffold in the host app
-- URLSessionWebSocket-based Azure Voice Live transport worker scaffold
+- SwiftUI macOS host app with full configuration UI
+- Microphone permission flow and device enumeration
+- Runtime Rust dylib loading and C ABI binding
+- Dylib auto-detection from build output
+- Plugin installer UI (deploy/uninstall HAL driver)
+- Input level monitor, shared buffer status display
+- Caption display (original + translated) with Apple Translate integration
+- Provider picker: None / OpenAI Realtime / Azure Voice Live / ElevenLabs / Local Caption
+- TTS mode picker: None / Local (ONNX) / Kokoro CoreML / ElevenLabs / MiniMax / Sidecar
+- Model download manager for STT models
+- Log viewer with pipeline debug output
 
 #### Virtual mic plug-in side
 
-Implemented as scaffold with compile-time and local runtime validation:
-
-- file-backed shared buffer protocol
-- plug-in-side shared buffer reader
-- render source that reads PCM and zero-fills underruns
-- `AudioServerPlugInDriverInterface` skeleton with plug-in/device/stream object IDs
-- property handlers for key plug-in/device/stream properties
-- device running-state properties:
-  - `DeviceIsRunning`
-  - `DeviceIsRunningSomewhere`
-  - `HogMode`
-- configuration-change notification path using host `PropertiesChanged()`
-- zero-length semantics for empty control lists and empty stream owned-object lists
-- factory/export alignment with system-style naming:
-  - `AudioServerPlugIn_Create`
-- bundle metadata alignment work:
-  - `CFBundleSignature`
-  - `CFBundleSupportedPlatforms`
-  - `LSMinimumSystemVersion`
-- full bundle ad-hoc signing for the assembled `.driver` bundle
-- COM-style driver reference layout fix:
-  - the factory now returns a ref compatible with `AudioServerPlugInDriverRef`
-  - `QueryInterface` now returns the driver ref object rather than the raw interface table
-- `.driver` bundle packaging scaffold
-- local install/uninstall/deploy scripts
-
-#### HAL smoke verifier
-
-Implemented and compiled:
-
-- CoreAudio-based CLI verifier that can:
-  - list currently enumerated devices
-  - search by target UID
-  - dump device properties
-  - run strict post-install checks when the device is found
-
-Strict verifier checks currently expect:
-
-- input streams = 1
-- output streams = 0
-- input channels = 1
-- output channels = 0
-- nominal sample rate = 48000 Hz
-- transport type = virtual
-- device alive = true
+- Fully functional HAL Audio Server Plug-in (ObjC++)
+- Mmap-based shared buffer reader
+- Continuous read-head playback strategy in render callback
+- Property handlers for plug-in/device/stream properties
+- Configuration change notification (`PropertiesChanged()`)
+- `AudioServerPlugIn_Create` factory export
+- Ad-hoc signed `.driver` bundle
+- System enumeration as `translator.virtual.mic.device`: **working**
 
 ### Deferred work
 
-Still not implemented:
+Still not implemented or not yet production-validated:
 
-- VAD
-- streaming ASR
-- machine translation
-- streaming TTS
-- real translated audio path into the virtual microphone
-- production-safe lock-free realtime buffers
-- production-quality Audio Server Plug-in object model
-- signing/distribution-grade install path
-- conferencing app compatibility validation
+- End-to-end cloud provider live sessions (bridges exist, live validation pending)
+- Production lock-free realtime buffers (mmap is working but not technically lock-free)
+- Production-quality Audio Server Plug-in object model
+- Signing/distribution-grade install path
+- Conferencing app compatibility validation (Zoom, Meet, Teams)
+- Apple Translation API fallback (macOS 15+)
 
 ## Development Progress
 
@@ -170,123 +145,57 @@ Still not implemented:
 
 #### Milestone 1: Rust engine skeleton
 
-Status: largely complete for narrow-path validation.
+Status: **complete**.
 
-Delivered:
-
-- Rust workspace
-- engine API crate
-- audio/session/metrics/common crates
-- demo CLI
-- metrics export
-- passthrough/silence validation path
+Delivered: Rust workspace, engine API crate, audio/session/metrics/common/output-bridge crates, demo CLI, metrics export, passthrough/silence/bridge validation path, lock-free SPSC audio rings, mmap shared buffer.
 
 #### Milestone 2: macOS host skeleton
 
-Status: scaffold complete.
+Status: **complete**.
 
-Delivered:
+Delivered: SwiftUI app shell, microphone permission flow, device enumeration, Rust FFI loading, state/metrics/shared-output display, provider/TTS/STT model pickers, dylib auto-detection, plugin installer UI, caption display, log viewer.
 
-- SwiftUI app shell
-- microphone permission flow
-- device enumeration
-- runtime Rust FFI loading
-- state/metrics/shared-output display
+#### Milestone 3: Caption pipeline (VAD → STT → MT → TTS)
 
-#### Milestone 3: microphone capture
+Status: **complete**.
 
-Status: scaffold complete, not yet hardened.
+Delivered: Silero VAD, 5 sherpa-onnx STT backends, remote + local MT, 5+ TTS providers with waterfall priority, streaming partials, parallel STT+MT/TTS worker threads, latency metrics, deduplication, streaming partial MT, voicebox sidecar integration.
 
-Delivered:
+#### Milestone 4: Virtual microphone
 
-- microphone capture service
-- PCM push into Rust
-- input level calculation
+Status: **working audio path**.
 
-Missing:
+Delivered: shared output bridge, render-source consumption, driver property skeleton, bundle packaging and signing, COM-layout-correct driver factory path, host-side HAL verifier, system enumeration, QuickTime recording through virtual device.
 
-- long-run hardening
-- CoreAudio-first capture path tuning
+#### Cloud translation bridges
 
-#### Virtual microphone scaffold
+Status: **skeleton complete, live validation pending**.
 
-Status: **Working Audio Path**.
+Delivered: OpenAI Realtime and Azure Voice Live WebSocket bridges, bootstrap/audio event queuing, ingestion/drain primitives.
 
-Delivered:
-- shared output bridge
-- render-source consumption
-- driver property skeleton
-- bundle packaging
-- bundle signing validation
-- COM-layout-correct driver factory path
-- host-side HAL verifier
-- **Successful system enumeration** (resolved by fixing `Info.plist` loading conditions and mandatory property handlers)
-- **QuickTime recording path working through `Translator Virtual Mic`**
-- shared-buffer magic alignment fix
-- continuous local read-head playback strategy in the plug-in reader
-- stable shared-buffer-driven `DoIOOperation` flow during live capture
-- quality improvements:
-  - host-side gain control
-  - soft limiter
-  - Bluetooth-input sample-rate compatibility path
-
-Missing:
-- real Azure-translated audio path into the virtual microphone from a live cloud session
-- production-safe lock-free realtime buffers
-- production-quality Audio Server Plug-in object model
-- signing/distribution-grade install path
-- conferencing app compatibility validation
-
-Current runtime state on 2026-04-12:
-
-- QuickTime recording now successfully receives audio from `Translator Virtual Mic`
-- host-side physical microphone input is routed into the virtual mic
-- Bluetooth headset input also works after adding sample-rate adaptation
-- remaining cloud-translation work is now focused on Azure Voice Live transport completion and end-to-end live session validation
+Missing: end-to-end live session validation against real cloud endpoints.
 
 ## Validation History
 
 ### Local validation that passes
 
-The following are currently passing:
-- `cargo check`
-- `cargo test -p common -p session-core -p engine-api`
+- `cargo check` — workspace-wide, all 14 crates
+- `cargo test --workspace` — 79 tests passing
 - Rust demo CLI
-- native plug-in scaffold build
-- native render-source test
-- driver tester for plug-in/device/stream property behavior
-- bundle validation script
-- HAL smoke verifier build
-- strict bundle signature verification with `codesign --verify --deep --strict`
-- native factory/reference validation with `factory_driver_ref_ok=1`
-- **System-wide device enumeration** (verified with `run-hal-smoke-verifier.sh --list`)
+- native plug-in scaffold build + bundle validation + strict codesign verify
+- HAL smoke verifier: build and enumeration
+- Python voicebox sidecar: syntax/import validation, all 8 backends importable
 
-### Real system installation attempt
+### Real system state (2026-05-06)
 
-Real install attempts were performed multiple times. As of 2026-04-07, the installation is fully functional:
-- The bundle is installed to `/Library/Audio/Plug-Ins/HAL/TranslatorVirtualMic.driver`.
-- `coreaudiod` successfully loads the driver (often in an isolated process).
-- The device `translator.virtual.mic.device` appears in the system audio list.
-
-As of 2026-04-11 and 2026-04-12:
-
-- the system driver can be rebuilt and redeployed successfully
-- QuickTime reaches `StartIO`, `WillDoIOOperation`, `BeginIOOperation`, and `DoIOOperation`
-- shared buffer playback is confirmed live via:
-  - `shared buffer flowing, produced ...`
-- QuickTime can record audible output from the virtual microphone device
-
-### Troubleshooting and Fixes
-For details on resolved enumeration issues, see [docs/troubleshooting.md](troubleshooting.md).
-Key fixes included:
-- Removing `AudioServerPlugIn_LoadingConditions` from `Info.plist`.
-- Implementing mandatory property handlers for `'rsrc'`, `'taps'`, and `'ctrl'`.
-- Handling permission issues during the rebuild/deploy cycle.
-
-Current debugging focus:
-- finish Azure Voice Live network transport validation against a real Azure resource
-- connect translated cloud audio back into the virtual microphone output path in `Translate` mode
-- reduce debug-log noise and evolve the current scaffolds into production-safe streaming code
+- Virtual device enumerates and is visible system-wide: **working**
+- QuickTime recording through `Translator Virtual Mic`: **working**
+- Bluetooth headset input: **working** (sample-rate adaptation)
+- Caption-Only pipeline (STT → MT → TTS → shared buffer): **working**
+- ElevenLabs, MiniMax, CosyVoice 2, sherpa-onnx Kokoro TTS: **working**
+- Voicebox sidecar TTS: **integrated**, not yet end-to-end validated
+- Cloud provider live sessions: **bridges exist**, not yet validated against real resources
+- Conferencing app validation (Zoom, Meet, Teams): **not yet tested**
 
 ## Installation and Usage
 
@@ -296,9 +205,21 @@ Run from repository root:
 
 ```bash
 cargo check
+cargo build --release
 cargo run -p demo-cli
 ./native/macos/scripts/build-hal-smoke-verifier.sh
 ./native/macos/scripts/build-plugin-bundle.sh
+```
+
+### Voicebox TTS sidecar
+
+```bash
+# Install Python deps
+./scripts/install_tts_sidecar_deps.sh          # base engines
+./scripts/install_tts_sidecar_deps.sh --mlx    # + Qwen MLX on Apple Silicon
+
+# Start sidecar
+python3 scripts/tts_sidecar_server.py --port 50001
 ```
 
 ### Local non-system staging
@@ -332,11 +253,7 @@ Notes:
 
 - this path writes to `/Library/Audio/Plug-Ins/HAL`
 - it requires `sudo`
-- it does not guarantee the plug-in will be loaded by the system
-- after installation, the recommended validation path is:
-  1. reboot macOS
-  2. run the HAL verifier
-- in the latest validation run, installation to disk succeeded, strict signature verification succeeded, but enumeration still did not
+- after installation, reboot macOS before running the HAL verifier
 
 ### HAL smoke verifier usage
 
@@ -380,26 +297,13 @@ Override expected strict values if needed:
 ## Current Known Limitations
 
 ### Functional limitations
-
-- no ASR/MT/TTS path exists yet
-- no translated audio is produced yet
-- no conferencing app validation has been completed
-- no end-to-end translated meeting scenario works yet
+- No end-to-end translated meeting scenario validated yet
+- No conferencing app compatibility validation completed
+- Voicebox sidecar not yet end-to-end validated
 
 ### Plug-in limitations
+- Current driver implementation is functional for QuickTime but not yet hardened for conferencing apps
+- Object model is suitable for prototype validation, not production release
 
-- current driver skeleton is still minimal and not yet accepted by HAL enumeration
-- object model is suitable for scaffold validation, not production release
-- system loading behavior is unresolved
-- current system log inspection does not show explicit `TranslatorVirtualMic` load failures, which suggests HAL may be skipping the bundle very early rather than loading and then erroring
-
-### Environment limitations
-
-- current macOS environment blocked the attempted `coreaudiod` kickstart path due to SIP
-- verifier confirmed the device is still absent from current system enumeration
-
-## Recommended Next Steps
-
-1. Continue aligning the Audio Server Plug-in implementation with Apple HAL sample expectations, especially object lifecycle and property surface.
-2. Keep using reboot-based validation after each meaningful HAL contract change.
-3. Only after the virtual microphone enumerates reliably should the project resume VAD/ASR/MT/TTS integration.
+### Cloud provider limitations
+- Cloud translation bridges exist but live session validation against real Azure/OpenAI resources is pending

@@ -158,57 +158,67 @@ struct ContentView: View {
 
                 if viewModel.selectedTranslationProvider == .localCaption {
                     Section("Local MT Model") {
-                        Picker("Model", selection: $viewModel.selectedLocalMtModelId) {
-                            ForEach(MtModelRegistry.allModels) { model in
-                                let downloaded = viewModel.isMtModelDownloaded(model.id)
-                                Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
-                            }
-                        }
-                        if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId) {
-                            Text(model.description)
+                        if #available(macOS 15.0, *) {
+                            Toggle("Use Apple Translation (On-Device)", isOn: $viewModel.appleTranslationEnabled)
+                        } else {
+                            Text("Apple Translation requires macOS 15+")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text("Direction: \(langDisplayName(model.srcLang)) → \(langDisplayName(model.tgtLang))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("Size: \(model.sizeDisplay)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            HStack {
-                                if viewModel.isMtModelDownloaded(model.id) {
-                                    Button("Delete") {
-                                        viewModel.deleteMtModel(model.id)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(.red)
-                                } else {
-                                    Button("Download") {
-                                        viewModel.downloadMtModel(model.id)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(viewModel.localMtModelDownloadState != .idle)
-                                }
-                                Spacer()
-                            }
-                            if case .downloading(let progress) = viewModel.localMtModelDownloadState,
-                               progress.modelId == model.id {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
-                                    Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
-                                        .font(.caption2)
-                                }
-                            }
                         }
 
-                        Toggle("Use local MT (replaces remote)", isOn: $viewModel.localMtEnabled)
-                            .disabled(!viewModel.isMtModelDownloaded(viewModel.selectedLocalMtModelId))
+                        if !viewModel.appleTranslationEnabled {
+                            Picker("Model", selection: $viewModel.selectedLocalMtModelId) {
+                                ForEach(MtModelRegistry.allModels) { model in
+                                    let downloaded = viewModel.isMtModelDownloaded(model.id)
+                                    Text("\(model.id) \(downloaded ? "✓" : "")").tag(model.id)
+                                }
+                            }
+                            if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId) {
+                                Text(model.description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("Direction: \(langDisplayName(model.srcLang)) → \(langDisplayName(model.tgtLang))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("Size: \(model.sizeDisplay)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack {
+                                    if viewModel.isMtModelDownloaded(model.id) {
+                                        Button("Delete") {
+                                            viewModel.deleteMtModel(model.id)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.red)
+                                    } else {
+                                        Button("Download") {
+                                            viewModel.downloadMtModel(model.id)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(viewModel.localMtModelDownloadState != .idle)
+                                    }
+                                    Spacer()
+                                }
+                                if case .downloading(let progress) = viewModel.localMtModelDownloadState,
+                                   progress.modelId == model.id {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        ProgressView(value: Double(progress.downloadedBytes), total: Double(progress.totalBytes))
+                                        Text("Downloading \(progress.fileName) (\(progress.fileIndex + 1)/\(progress.totalFiles))")
+                                            .font(.caption2)
+                                    }
+                                }
+                            }
 
-                        if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId),
-                           model.tgtLang != "*",
-                           model.tgtLang != viewModel.targetLanguage {
-                            Text("Warning: Model translates to \(langDisplayName(model.tgtLang)) but target language is \(langDisplayName(viewModel.targetLanguage))")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                            Toggle("Use local MT (replaces remote)", isOn: $viewModel.localMtEnabled)
+                                .disabled(!viewModel.isMtModelDownloaded(viewModel.selectedLocalMtModelId))
+
+                            if let model = MtModelRegistry.model(for: viewModel.selectedLocalMtModelId),
+                               model.tgtLang != "*",
+                               model.tgtLang != viewModel.targetLanguage {
+                                Text("Warning: Model translates to \(langDisplayName(model.tgtLang)) but target language is \(langDisplayName(viewModel.targetLanguage))")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
                         }
                     }
                 }
@@ -273,115 +283,53 @@ struct ContentView: View {
                             .disabled(!viewModel.isTtsModelDownloaded(viewModel.selectedTtsModelId))
                         }
 
-                        // ── Chatterbox TTS ─────────────────────────────────
-                        if viewModel.ttsModeSelection == .chatterbox {
-                            HStack {
-                                Circle()
-                                    .fill(viewModel.cosyvoiceServerRunning ? Color.green : Color.gray)
-                                    .frame(width: 8, height: 8)
-                                Text(viewModel.cosyvoiceServerRunning ? "Server running" : "Server stopped")
-                                    .font(.caption)
-                                Spacer()
-                                Button(viewModel.cosyvoiceServerRunning ? "Stop" : "Start") {
-                                    if viewModel.cosyvoiceServerRunning {
-                                        viewModel.stopCosyvoiceServer()
-                                    } else {
-                                        viewModel.startCosyvoiceServer()
+                        // ── Kokoro CoreML TTS ──────────────────────────────
+                        if viewModel.ttsModeSelection == .coreml {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Models directory")
+                                        .font(.caption)
+                                    Spacer()
+                                    if viewModel.kokoroCoreMLEnabled {
+                                        Label("Active", systemImage: "checkmark.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(.green)
                                     }
                                 }
-                                .buttonStyle(.bordered)
-                            }
-
-                            HStack {
-                                Text("chatterbox_server.py")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                                 TextField(
-                                    "path/to/scripts/chatterbox_server.py",
-                                    text: $viewModel.cosyvoiceServerScriptPath
+                                    "~/Library/Application Support/translator-virtual-mic/models/kokoro-coreml",
+                                    text: $viewModel.kokoroCoreMLModelDir
                                 )
                                 .font(.caption)
                                 .textFieldStyle(.roundedBorder)
-                            }
 
-                            HStack {
-                                Text("Port")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                TextField("50000", value: $viewModel.cosyvoiceServerPort, format: .number)
-                                    .font(.caption)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 70)
-                                Spacer()
-                            }
-
-                            Divider()
-
-                            Text("Reference Voice")
-                                .font(.caption)
-                                .bold()
-
-                            HStack {
-                                Text("Reference audio")
-                                    .font(.caption)
-                                Spacer()
-                                if viewModel.cosyvoiceRefWavReady {
-                                    Label("Ready", systemImage: "checkmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.green)
-                                } else {
-                                    Label("None", systemImage: "xmark.circle")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-
-                            if viewModel.cosyvoiceRecording {
                                 HStack {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text(String(
-                                        format: "Recording %.1fs / 10s",
-                                        viewModel.cosyvoiceRecordingSeconds
-                                    ))
+                                    Text("Voice")
+                                        .font(.caption)
+                                    Picker("", selection: $viewModel.kokoroCoreMLVoiceId) {
+                                        Text("af (American Female)").tag("af")
+                                        Text("am (American Male)").tag("am")
+                                        Text("bf (British Female)").tag("bf")
+                                        Text("bm (British Male)").tag("bm")
+                                    }
+                                    .pickerStyle(.segmented)
                                     .font(.caption)
-                                    Spacer()
-                                    Button("Stop") { viewModel.stopVoiceCloneRecording() }
-                                        .buttonStyle(.bordered)
                                 }
-                            } else {
-                                Button("Record Reference Voice (≤10s)") {
-                                    viewModel.startVoiceCloneRecording()
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text("Speed")
+                                        Spacer()
+                                        Text(String(format: "%.1fx", viewModel.kokoroCoreMLSpeed))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Slider(value: $viewModel.kokoroCoreMLSpeed, in: 0.5...2.0, step: 0.1)
                                 }
-                                .buttonStyle(.bordered)
+
+                                Text("Requires kokoro-coreml CoreML models and Python tokenizer. See docs/apple-silicon-model-research.md")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
-
-                            TextField(
-                                "Transcription of reference audio (required)",
-                                text: $viewModel.cosyvoicePromptText
-                            )
-                            .font(.caption)
-                            .textFieldStyle(.roundedBorder)
-
-                            Divider()
-
-                            Text("Test Cloned Voice")
-                                .font(.caption)
-                                .bold()
-
-                            TextField("Text to synthesise…", text: $viewModel.cosyvoiceTestText)
-                                .font(.caption)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button(viewModel.cosyvoiceTesting ? "Testing…" : "Play Test") {
-                                viewModel.testCosyvoiceVoice()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(
-                                !viewModel.cosyvoiceServerRunning
-                                    || viewModel.cosyvoiceTesting
-                                    || !viewModel.cosyvoiceRefWavReady
-                            )
                         }
 
                         // ── ElevenLabs TTS ─────────────────────────────────
@@ -424,6 +372,27 @@ struct ContentView: View {
                             )
                             .font(.caption)
                             .foregroundStyle(hasVoice ? .green : .red)
+                        }
+
+                        // ── Sidecar TTS (Voicebox) ─────────────────────
+                        if viewModel.ttsModeSelection == .sidecar {
+                            Text("Requires Python tts_sidecar_server.py running on port 50001.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                TextField("Engine", text: $viewModel.sidecarEngine)
+                                    .font(.caption)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("Voice Name", text: $viewModel.sidecarVoiceName)
+                                    .font(.caption)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            Text("Supports: kokoro, qwen_tts, chatterbox, luxtts, hume")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("Install: ./scripts/install_tts_sidecar_deps.sh (--mlx for Apple Silicon)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -472,7 +441,7 @@ private struct DetailPanel: View {
                 .font(.system(.footnote, design: .monospaced))
                 .textSelection(.enabled)
 
-            if viewModel.selectedTranslationProvider == .appleTranslation {
+            if viewModel.selectedTranslationProvider == .localCaption && viewModel.appleTranslationEnabled {
                 appleTranslationSection
             } else {
                 standardCaptionSection

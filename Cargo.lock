@@ -1431,6 +1431,7 @@ dependencies = [
  "tts-cosyvoice",
  "tts-elevenlabs",
  "tts-minimax",
+ "tts-sidecar",
 ]
 
 [[package]]
@@ -1721,6 +1722,17 @@ dependencies = [
  "hex",
  "serde_json",
  "thiserror 1.0.69",
+ "ureq 2.12.1",
+]
+
+[[package]]
+name = "tts-sidecar"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "ureq 2.12.1",
 ]
 

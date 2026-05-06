@@ -22,7 +22,7 @@ fn log_and_eprint(log_tx: &Option<Sender<String>>, msg: String) {
 
 use common::{
     CosyVoiceTtsConfig, ElevenLabsTtsConfig, EngineError, LocalMtConfig, LocalSttConfig,
-    MiniMaxTtsConfig, MtConfig, Result, TtsConfig,
+    MiniMaxTtsConfig, MtConfig, Result, SidecarTtsConfig, TtsConfig,
 };
 use mt_client::{MtClient, MtClientConfig};
 use mt_local::{load_backend as load_local_mt_backend, LocalMtBackend};
@@ -32,6 +32,7 @@ use stt_local::{load_backend, load_tts_backend, TranscriberBackend, TtsBackend};
 use tts_cosyvoice::{CosyVoiceClient, CosyVoiceConfig};
 use tts_elevenlabs::{ElevenLabsTtsClient, ElevenLabsTtsConfig as ElTtsConfig};
 use tts_minimax::MiniMaxTtsClient;
+use tts_sidecar::{SidecarClient, SidecarConfig};
 
 const VAD_CHUNK_FRAMES: usize = 512; // sherpa Silero default window
 
@@ -145,6 +146,7 @@ impl CaptionPipeline {
         cosyvoice_cfg: Option<&CosyVoiceTtsConfig>,
         elevenlabs_tts_cfg: Option<&ElevenLabsTtsConfig>,
         minimax_tts_cfg: Option<&MiniMaxTtsConfig>,
+        sidecar_tts_cfg: Option<&SidecarTtsConfig>,
         log_tx: Option<Sender<String>>,
         metrics: Option<Arc<metrics::EngineMetrics>>,
     ) -> Result<Self> {
@@ -336,6 +338,41 @@ impl CaptionPipeline {
             _ => None,
         };
 
+        // Optional voicebox sidecar TTS client (unified Python backend).
+        let sidecar_client: Option<SidecarClient> = match sidecar_tts_cfg {
+            Some(cfg) if cfg.enabled => {
+                let sc_cfg = SidecarConfig {
+                    endpoint: cfg.endpoint.clone(),
+                    engine: cfg.engine.clone(),
+                    voice_name: cfg.voice_name.clone(),
+                    ref_audio: cfg.ref_audio.clone(),
+                    ref_text: cfg.ref_text.clone(),
+                    language: cfg.language.clone(),
+                    model_size: cfg.model_size.clone(),
+                };
+                match SidecarClient::new(sc_cfg) {
+                    Ok(client) => {
+                        log_and_eprint(
+                            &log_tx,
+                            format!(
+                                "[caption_pipeline] sidecar TTS client ready (engine={}, endpoint={})",
+                                cfg.engine, cfg.endpoint
+                            ),
+                        );
+                        Some(client)
+                    }
+                    Err(e) => {
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] sidecar TTS init failed: {e}"),
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let partial_interval = Duration::from_millis(stt.partial_interval_ms);
         let max_partial_samples = (stt.max_partial_window_seconds * 16_000.0) as usize;
         let overlap_tail_samples = ((stt.overlap_tail_ms as f32 / 1000.0) * 16_000.0) as usize;
@@ -361,6 +398,7 @@ impl CaptionPipeline {
                     cosyvoice_client,
                     elevenlabs_client,
                     minimax_client,
+                    sidecar_client,
                     target_lang,
                     local_mt_target_lang,
                     post_rx,
@@ -761,6 +799,7 @@ fn post_processor_loop(
     cosyvoice: Option<CosyVoiceClient>,
     elevenlabs: Option<ElevenLabsTtsClient>,
     minimax: Option<MiniMaxTtsClient>,
+    sidecar: Option<SidecarClient>,
     target_lang: String,
     local_mt_target_lang: String,
     rx: Receiver<PostProcessJob>,
@@ -843,7 +882,7 @@ fn post_processor_loop(
 
         let tts_candidate: &str = translated.as_deref().unwrap_or(&original);
         let has_tts =
-            minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || tts.is_some();
+            minimax.is_some() || elevenlabs.is_some() || cosyvoice.is_some() || sidecar.is_some() || tts.is_some();
         if has_tts
             && !tts_candidate.trim().is_empty()
             && tts_candidate.trim() != last_tts_text.trim()
@@ -898,6 +937,24 @@ fn post_processor_loop(
                         log_and_eprint(
                             &log_tx,
                             format!("[caption_pipeline] post_processor: CosyVoice TTS error: {e}"),
+                        );
+                        None
+                    }
+                }
+            } else if let Some(ref sc) = sidecar {
+                match sc.synthesize(tts_candidate) {
+                    Ok((samples, rate)) if !samples.is_empty() => {
+                        eprintln!(
+                            "[caption_pipeline] post_processor: sidecar TTS produced {} samples @ {}Hz",
+                            samples.len(), rate
+                        );
+                        Some((samples, rate))
+                    }
+                    Ok(_) => None,
+                    Err(e) => {
+                        log_and_eprint(
+                            &log_tx,
+                            format!("[caption_pipeline] post_processor: sidecar TTS error: {e}"),
                         );
                         None
                     }

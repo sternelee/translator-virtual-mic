@@ -26,19 +26,21 @@ struct SharedBufferMonitorSnapshot {
 enum TtsModeSelection: String, CaseIterable, Identifiable {
     case none = "none"
     case local = "local"
-    case chatterbox = "chatterbox"
+    case coreml = "coreml"
     case elevenlabs = "elevenlabs"
     case minimax = "minimax"
+    case sidecar = "sidecar"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .none: "None"
-        case .local: "Local TTS"
-        case .chatterbox: "Chatterbox (Voice Cloning)"
+        case .local: "Local TTS (ONNX)"
+        case .coreml: "Kokoro CoreML (ANE)"
         case .elevenlabs: "ElevenLabs API"
         case .minimax: "MiniMax API"
+        case .sidecar: "Sidecar (Voicebox)"
         }
     }
 }
@@ -49,7 +51,6 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
     case azureVoiceLive = "azure_voice_live"
     case elevenLabs = "eleven_labs"
     case localCaption = "local_caption"
-    case appleTranslation = "apple_translation"
 
     var id: String { rawValue }
 
@@ -60,12 +61,6 @@ enum TranslationServiceProvider: String, CaseIterable, Identifiable {
         case .azureVoiceLive: return "Azure Voice Live"
         case .elevenLabs: return "ElevenLabs"
         case .localCaption: return "Local Caption"
-        case .appleTranslation:
-            if #available(macOS 15.0, *) {
-                return "Apple Translation (On-Device)"
-            } else {
-                return "Apple Translation (macOS 15+ required)"
-            }
         }
     }
 }
@@ -100,6 +95,7 @@ final class AppViewModel: ObservableObject {
     @Published var localSttModelDownloadState: DownloadState = .idle
     @Published var selectedLocalMtModelId: String = "opus-mt-zh-en"
     @Published var localMtEnabled: Bool = false
+    @Published var appleTranslationEnabled: Bool = false
     @Published var localMtModelDownloadState: DownloadState = .idle
     @Published var ttsEnabled: Bool = false
     @Published var selectedTtsModelId: String = "kokoro-en-v0_19"
@@ -107,22 +103,18 @@ final class AppViewModel: ObservableObject {
     @Published var ttsModelDownloadState: DownloadState = .idle
     @Published var ttsModeSelection: TtsModeSelection = .none
 
-    // ElevenLabs TTS
-    @Published var elevenlabsTtsEnabled: Bool = false
+    // Kokoro CoreML TTS
+    @Published var kokoroCoreMLModelDir: String = ""
+    @Published var kokoroCoreMLVoiceId: String = "af"
+    @Published var kokoroCoreMLSpeed: Double = 1.0
+    @Published var kokoroCoreMLEnabled: Bool = false
 
-    // CosyVoice TTS (voice cloning)
-    @Published var cosyvoiceServerScriptPath: String = ""
-    @Published var cosyvoiceServerPort: Int = 50000
-    @Published var cosyvoiceServerRunning: Bool = false
-    @Published var cosyvoiceTtsEnabled: Bool = false
-    @Published var cosyvoicePromptText: String = ""
-    @Published var cosyvoiceRecording: Bool = false
-    @Published var cosyvoiceRecordingSeconds: Double = 0
-    @Published var cosyvoiceRefWavReady: Bool = false
-    @Published var cosyvoiceTestText: String = "Hello, this is a voice cloning test."
-    @Published var cosyvoiceTesting: Bool = false
+    // Sidecar TTS (voicebox)
+    @Published var sidecarEndpoint: String = "http://127.0.0.1:50001"
+    @Published var sidecarEngine: String = "kokoro"
+    @Published var sidecarVoiceName: String = "af_heart"
 
-    private let cosyvoiceService = CosyVoiceService()
+    private let kokoroCoreMLService = KokoroCoreMLService()
     private let captureService = MicrophoneCaptureService()
     private let azureVoiceLiveService = AzureVoiceLiveService()
     private let openAIRealtimeService = OpenAIRealtimeService()
@@ -157,7 +149,6 @@ final class AppViewModel: ObservableObject {
     init() {
         refreshDevices()
         requestMicrophonePermission()
-        cosyvoiceRefWavReady = cosyvoiceService.refWavExists
     }
 
     func requestMicrophonePermission() {
@@ -260,7 +251,7 @@ final class AppViewModel: ObservableObject {
 
         let engineMode: EngineMode = switch selectedTranslationProvider {
         case .none: .bypass
-        case .localCaption, .appleTranslation: .captionOnly
+        case .localCaption: .captionOnly
         default: .translate
         }
         _ = engine.setTargetLanguage(targetLanguage)
@@ -334,16 +325,19 @@ final class AppViewModel: ObservableObject {
         switch selectedTranslationProvider {
         case .localCaption:
             captionService.start(engine: engine)
-            appendLog("Local caption service started")
-        case .appleTranslation:
-            captionService.start(engine: engine)
-            if #available(macOS 15.0, *) {
-                appleTranslationSource = ""
-                appleTranslatedCaption = ""
-                appendLog("Apple Translation ready: \(sourceLanguageForTranslation) → \(targetLanguageForTranslation)")
-            } else {
-                appendLog("Apple Translation requires macOS 15+")
+            if appleTranslationEnabled {
+                if #available(macOS 15.0, *) {
+                    appleTranslationSource = ""
+                    appleTranslatedCaption = ""
+                    appendLog("Apple Translation ready: \(sourceLanguageForTranslation) → \(targetLanguageForTranslation)")
+                } else {
+                    appendLog("Apple Translation requires macOS 15+")
+                }
             }
+            if ttsModeSelection == .coreml {
+                startKokoroCoreMLTTS(using: engine)
+            }
+            appendLog("Local caption service started")
         default:
             startTranslationService(using: engine)
         }
@@ -356,6 +350,9 @@ final class AppViewModel: ObservableObject {
         openAIRealtimeService.stop()
         elevenLabsPipelineService.stop()
         captionService.stop()
+        captionService.onFinalTranslation = nil
+        kokoroCoreMLService.stop()
+        kokoroCoreMLEnabled = false
         appleTranslationSource = ""
         appleTranslatedCaption = ""
         stopSharedBufferMonitor()
@@ -437,7 +434,7 @@ final class AppViewModel: ObservableObject {
             let mtTarget = targetLanguage
 
             // Local MT config
-            let localMtEnabledStr = localMtEnabled ? "true" : "false"
+            let localMtEnabledStr = (localMtEnabled && !appleTranslationEnabled) ? "true" : "false"
             let localMtModelId = env["LOCAL_MT_MODEL_ID"] ?? selectedLocalMtModelId
             let localMtModelDir = env["LOCAL_MT_MODEL_DIR"] ?? modelDir
             let localMtSourceLang = env["LOCAL_MT_SOURCE_LANG"] ?? "zh"
@@ -450,14 +447,6 @@ final class AppViewModel: ObservableObject {
                 .path ?? ""
             let ttsSpeedStr = String(format: "%.2f", ttsSpeed)
             let ttsEnabledStr = (ttsModeSelection == .local && isTtsModelDownloaded(selectedTtsModelId)) ? "true" : "false"
-
-            // CosyVoice TTS config
-            let cvEndpoint = "http://127.0.0.1:\(cosyvoiceServerPort)"
-            let cvEnabledStr = (ttsModeSelection == .chatterbox && cosyvoiceServerRunning) ? "true" : "false"
-            let cvWavPath = CosyVoiceService.refWavPath
-            let cvPromptText = cosyvoicePromptText
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
 
             // ElevenLabs TTS config
             let elEnabledStr = (ttsModeSelection == .elevenlabs) ? "true" : "false"
@@ -472,8 +461,15 @@ final class AppViewModel: ObservableObject {
             let mmModel = env["MINIMAX_TTS_MODEL"] ?? "speech-01-turbo"
             let mmApiHost = env["MINIMAX_API_HOST"] ?? "https://api.minimaxi.com"
 
-            // Append local_stt, mt, local_mt, tts, cosyvoice_tts, elevenlabs_tts, and minimax_tts keys
-            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr),"cosyvoice_tts_enabled":\#(cvEnabledStr),"cosyvoice_tts_endpoint":"\#(cvEndpoint)","cosyvoice_tts_prompt_wav_path":"\#(cvWavPath)","cosyvoice_tts_prompt_text":"\#(cvPromptText)","elevenlabs_tts_enabled":\#(elEnabledStr),"elevenlabs_tts_api_key":"\#(elApiKey)","elevenlabs_tts_voice_id":"\#(elVoiceId)","elevenlabs_tts_model_id":"\#(elModelId)","minimax_tts_enabled":\#(mmEnabledStr),"minimax_tts_api_key":"\#(mmApiKey)","minimax_tts_voice_id":"\#(mmVoiceId)","minimax_tts_model":"\#(mmModel)","minimax_tts_api_host":"\#(mmApiHost)"}"#
+            // Sidecar TTS config (voicebox unified backend)
+            let scEnabledStr = (ttsModeSelection == .sidecar) ? "true" : "false"
+            let scEndpoint = env["SIDECAR_TTS_ENDPOINT"] ?? sidecarEndpoint
+            let scEngine = env["SIDECAR_TTS_ENGINE"] ?? sidecarEngine
+            let scVoiceName = env["SIDECAR_TTS_VOICE_NAME"] ?? sidecarVoiceName
+            let scLanguage = env["SIDECAR_TTS_LANGUAGE"] ?? "en"
+
+            // Append local_stt, mt, local_mt, tts, elevenlabs_tts, and minimax_tts keys
+            let extra = #","local_stt_enabled":true,"local_stt_model_id":"\#(modelId)","local_stt_model_dir":"\#(modelDir)","local_stt_vad_model_path":"\#(vadPath)","local_stt_vad_threshold":\#(vadThreshold),"local_stt_language":"\#(sttLanguage)","mt_enabled":\#(mtEnabled),"mt_endpoint":"\#(mtEndpoint)","mt_api_key":"\#(mtApiKey)","mt_api_key_env":"\#(mtApiKeyEnv)","mt_model":"\#(mtModel)","mt_target_language":"\#(mtTarget)","local_mt_enabled":\#(localMtEnabledStr),"local_mt_model_id":"\#(localMtModelId)","local_mt_model_dir":"\#(localMtModelDir)","local_mt_source_lang":"\#(localMtSourceLang)","tts_enabled":\#(ttsEnabledStr),"tts_model_id":"\#(selectedTtsModelId)","tts_model_dir":"\#(ttsModelDir)","tts_speaker_id":0,"tts_speed":\#(ttsSpeedStr),"elevenlabs_tts_enabled":\#(elEnabledStr),"elevenlabs_tts_api_key":"\#(elApiKey)","elevenlabs_tts_voice_id":"\#(elVoiceId)","elevenlabs_tts_model_id":"\#(elModelId)","minimax_tts_enabled":\#(mmEnabledStr),"minimax_tts_api_key":"\#(mmApiKey)","minimax_tts_voice_id":"\#(mmVoiceId)","minimax_tts_model":"\#(mmModel)","minimax_tts_api_host":"\#(mmApiHost)","sidecar_tts_enabled":\#(scEnabledStr),"sidecar_tts_endpoint":"\#(scEndpoint)","sidecar_tts_engine":"\#(scEngine)","sidecar_tts_voice_name":"\#(scVoiceName)","sidecar_tts_language":"\#(scLanguage)"}"#
             if let idx = base.lastIndex(of: "}") {
                 base.replaceSubrange(idx...base.index(before: base.endIndex), with: extra)
             }
@@ -484,7 +480,7 @@ final class AppViewModel: ObservableObject {
 
     private func startTranslationService(using engine: EngineBox) {
         switch selectedTranslationProvider {
-        case .none, .localCaption, .appleTranslation:
+        case .none, .localCaption:
             return
         case .azureVoiceLive:
             startAzureVoiceLive(using: engine)
@@ -559,6 +555,69 @@ final class AppViewModel: ObservableObject {
         elevenLabsPipelineService.configure(engine: engine, targetLocale: targetLocale)
         elevenLabsPipelineService.reset()
         appendLog("ElevenLabs pipeline started (target=\(targetLocale))")
+    }
+
+    private func startKokoroCoreMLTTS(using engine: EngineBox) {
+        let modelDirURL: URL
+        if !kokoroCoreMLModelDir.isEmpty {
+            modelDirURL = URL(fileURLWithPath: kokoroCoreMLModelDir)
+        } else {
+            modelDirURL = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first!
+                .appendingPathComponent("translator-virtual-mic/models/kokoro-coreml")
+        }
+
+        kokoroCoreMLService.stop()
+
+        var cfg = KokoroCoreMLService.Config.default
+        cfg.modelsDirectory = modelDirURL
+        cfg.voiceId = kokoroCoreMLVoiceId
+        cfg.speed = Float(kokoroCoreMLSpeed)
+
+        let service = kokoroCoreMLService
+        do {
+            try service.start()
+            kokoroCoreMLEnabled = service.isRunning
+            appendLog("Kokoro CoreML TTS started (models=\(modelDirURL.path), voice=\(kokoroCoreMLVoiceId))")
+        } catch {
+            kokoroCoreMLEnabled = false
+            appendLog("Kokoro CoreML TTS start failed: \(error.localizedDescription)")
+            return
+        }
+
+        // Wire caption final-translation callback to CoreML TTS
+        captionService.onFinalTranslation = { [weak self] translatedText in
+            guard let self else { return }
+            guard self.kokoroCoreMLEnabled else { return }
+            Task {
+                do {
+                    let samples = try await service.synthesize(text: translatedText)
+                    guard !samples.isEmpty else { return }
+                    let timestampNs = DispatchTime.now().uptimeNanoseconds
+                    let result = engine.pushTranslatedPCM(
+                        samples: samples,
+                        frameCount: Int32(samples.count),
+                        channels: 1,
+                        sampleRate: 24_000,
+                        timestampNs: timestampNs
+                    )
+                    if result != 0 {
+                        await MainActor.run {
+                            self.appendLog("pushTranslatedPCM failed: \(engine.lastError())")
+                        }
+                    } else {
+                        await MainActor.run {
+                            self.appendLog("Kokoro CoreML TTS: \(samples.count) samples @ 24kHz for '\(translatedText.prefix(40))...'")
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.appendLog("Kokoro CoreML TTS synthesis error: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
     }
 
     private func startSharedBufferMonitor() {
@@ -756,60 +815,6 @@ final class AppViewModel: ObservableObject {
         guard let model = TtsModelRegistry.model(for: modelId) else { return }
         modelDownloadService.deleteTtsModel(model)
         appendLog("Deleted TTS model \(modelId)")
-    }
-
-    // MARK: - CosyVoice TTS
-
-    func startCosyvoiceServer() {
-        cosyvoiceService.startServer(
-            scriptPath: cosyvoiceServerScriptPath,
-            port: cosyvoiceServerPort
-        ) { [weak self] msg in
-            self?.appendLog(msg)
-            self?.cosyvoiceServerRunning = self?.cosyvoiceService.serverIsRunning ?? false
-        }
-        cosyvoiceServerRunning = cosyvoiceService.serverIsRunning
-    }
-
-    func stopCosyvoiceServer() {
-        cosyvoiceService.stopServer { [weak self] msg in self?.appendLog(msg) }
-        cosyvoiceServerRunning = false
-        if cosyvoiceTtsEnabled { cosyvoiceTtsEnabled = false }
-    }
-
-    func startVoiceCloneRecording() {
-        cosyvoiceRecording = true
-        cosyvoiceRecordingSeconds = 0
-        cosyvoiceService.startRecording { [weak self] elapsed in
-            self?.cosyvoiceRecordingSeconds = elapsed
-        } onStop: { [weak self] msg in
-            self?.appendLog(msg)
-            self?.cosyvoiceRecording = false
-            self?.cosyvoiceRecordingSeconds = 0
-            self?.cosyvoiceRefWavReady = self?.cosyvoiceService.refWavExists ?? false
-        }
-    }
-
-    func stopVoiceCloneRecording() {
-        cosyvoiceService.stopRecording()
-        appendLog("Reference recording saved")
-        cosyvoiceRecording = false
-        cosyvoiceRecordingSeconds = 0
-        cosyvoiceRefWavReady = cosyvoiceService.refWavExists
-    }
-
-    func testCosyvoiceVoice() {
-        guard !cosyvoiceTesting else { return }
-        cosyvoiceTesting = true
-        cosyvoiceService.testVoice(
-            port: cosyvoiceServerPort,
-            ttsText: cosyvoiceTestText,
-            promptText: cosyvoicePromptText
-        ) { [weak self] msg in
-            self?.appendLog(msg)
-        } completion: { [weak self] in
-            self?.cosyvoiceTesting = false
-        }
     }
 
     private func drainEngineLogs() {

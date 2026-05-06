@@ -406,6 +406,7 @@ impl EngineSession {
         let cosyvoice_tts = self.config.cosyvoice_tts.clone();
         let elevenlabs_tts = self.config.elevenlabs_tts.clone();
         let minimax_tts = self.config.minimax_tts.clone();
+        let sidecar_tts = self.config.sidecar_tts.clone();
         self.log(format!(
             "[session-core] building caption pipeline: model_id={} model_dir={:?} vad={:?}",
             stt.model_id, stt.model_dir, stt.vad_model_path
@@ -419,6 +420,7 @@ impl EngineSession {
             cosyvoice_tts.as_ref(),
             elevenlabs_tts.as_ref(),
             minimax_tts.as_ref(),
+            sidecar_tts.as_ref(),
             log_tx,
             Some(self.metrics.clone()),
         ) {

@@ -15,3 +15,4 @@ mt-local = { path = "../mt-local" }
 tts-cosyvoice = { path = "../tts-cosyvoice" }
 tts-elevenlabs = { path = "../tts-elevenlabs" }
 tts-minimax = { path = "../tts-minimax" }
+tts-sidecar = { path = "../tts-sidecar" }

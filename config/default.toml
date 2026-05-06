@@ -94,6 +94,21 @@ prompt_wav_path = "~/.translator_virtual_mic/ref_voice.wav"
 # Transcript of the reference wav - improves prosody; leave empty if unknown.
 prompt_text = ""
 
+# Voicebox unified TTS sidecar (Python FastAPI, same as voicebox project).
+# Supports Kokoro, Qwen3-TTS, Chatterbox, LuxTTS, Hume via one endpoint.
+# Run the server: python3 scripts/tts_sidecar_server.py --port 50001
+[sidecar_tts]
+enabled = false
+endpoint = "http://127.0.0.1:50001"
+engine = "kokoro"
+voice_name = "af_heart"
+# Zero-shot voice cloning (optional, requires chatterbox/qwen engine):
+# ref_audio = "~/.translator_virtual_mic/ref_voice.wav"
+# ref_text = ""
+language = "en"
+# Model size for Qwen engines ("0.6B" or "1.7B"):
+# model_size = "1.7B"
+
 [observability]
 metrics_enabled = true
 log_level = "info"

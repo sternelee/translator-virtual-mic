@@ -110,5 +110,65 @@
 
 1. ✅ 添加 **Apple Translation API** 作为 Swift 层翻译选项
 2. ✅ 添加 **MadLad-400-3B** 作为 Rust 层本地 MT backend (subprocess → Python mlx-lm)
-3. 📋 Kokoro CoreML 升级 (后续)
+3. ✅ **Kokoro CoreML 升级** — 已集成到 Swift Host，可选依赖 kokoro-coreml 包
 4. 📋 STT 模型对比和升级 (等待调研完成)
+
+---
+
+## Kokoro CoreML 实施详情
+
+### 架构
+
+```
+Rust caption pipeline (STT → MT)
+  → Swift CaptionService 轮询 final caption
+    → KokoroCoreMLService.synthesize(text)
+      1. Python tokenizer subprocess (kokoro_coreml_tokenize.py)
+         text → phonemes → input_ids, attention_mask, ref_s
+      2. Swift KokoroPipeline CoreML 推理 (ANE)
+         → [Float] @ 24kHz
+    → engine.pushTranslatedPCM() → Rust 输出环 (自动重采样到 48kHz)
+```
+
+### 文件变更
+
+| 文件 | 说明 |
+|------|------|
+| `apps/macos-host/Sources/App/KokoroCoreMLService.swift` | CoreML TTS 服务，支持 `#if canImport(KokoroPipeline)` 条件编译 |
+| `scripts/kokoro_coreml_tokenize.py` | Python tokenizer 辅助脚本，JSON line 协议 |
+| `apps/macos-host/Sources/App/CaptionService.swift` | 新增 `onFinalTranslation` 回调 |
+| `apps/macos-host/Sources/App/AppViewModel.swift` | 新增 `.coreml` TTS 模式，禁用 Rust TTS 时自动启用 Swift CoreML TTS |
+| `apps/macos-host/Sources/App/ContentView.swift` | 新增 CoreML TTS UI 配置面板 |
+| `apps/macos-host/Package.swift` | 预留 kokoro-coreml 依赖注释 |
+
+### 启用步骤
+
+1. **克隆并安装 kokoro-coreml**
+   ```bash
+   git clone https://github.com/mattmireles/kokoro-coreml.git ../third_party/kokoro-coreml
+   cd ../third_party/kokoro-coreml
+   pip install -e .
+   brew install espeak-ng
+   ```
+
+2. **导出 CoreML 模型**
+   按照 kokoro-coreml README 导出 `.mlpackage` 模型文件到应用支持目录：
+   ```
+   ~/Library/Application Support/translator-virtual-mic/models/kokoro-coreml/
+   ```
+
+3. **修改 Package.swift**
+   取消注释 `dependencies` 和 `dependencies` 中 KokoroPipeline 相关的行。
+
+4. **重新构建**
+   ```bash
+   cd apps/macos-host
+   swift build
+   ```
+
+### 注意事项
+
+- 当选择 **Kokoro CoreML (ANE)** 模式时，Rust 层的 `tts_enabled` 自动设为 `false`，避免重复生成音频。
+- CoreML 输出为 **24 kHz**，Rust `pushTranslatedPCM` 会自动重采样到 48 kHz。
+- Python tokenizer 子进程在引擎启动时一次性创建，通过 stdin/stdout JSON 协议通信（与 MadLad 相同模式）。
+- 若未链接 KokoroPipeline，服务编译为 stub，启动时会提示用户添加依赖。

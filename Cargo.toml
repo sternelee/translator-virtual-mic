@@ -13,6 +13,7 @@ members = [
   "crates/tts-cosyvoice",
   "crates/tts-elevenlabs",
   "crates/tts-minimax",
+  "crates/tts-sidecar",
 ]
 resolver = "2"
 

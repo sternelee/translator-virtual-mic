@@ -316,6 +316,76 @@ impl MiniMaxTtsConfig {
     }
 }
 
+/// Config for voicebox-based unified TTS sidecar (Python FastAPI).
+/// Supports Kokoro, Qwen, Chatterbox, LuxTTS, Hume via one endpoint.
+#[derive(Clone, Debug)]
+pub struct SidecarTtsConfig {
+    pub enabled: bool,
+    /// HTTP base URL of the sidecar server.
+    pub endpoint: String,
+    /// TTS engine name: "kokoro", "qwen_tts", "chatterbox", etc.
+    pub engine: String,
+    /// Preset voice ID (e.g. "af_heart" for Kokoro). Optional.
+    pub voice_name: Option<String>,
+    /// Path to reference WAV for zero-shot voice cloning. Optional.
+    pub ref_audio: Option<String>,
+    /// Transcript of reference audio. Optional.
+    pub ref_text: Option<String>,
+    /// Language code ("en", "ja", "zh"...).
+    pub language: String,
+    /// Model size variant ("0.6B", "1.7B" for Qwen).
+    pub model_size: Option<String>,
+}
+
+impl Default for SidecarTtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:50001".to_string(),
+            engine: "kokoro".to_string(),
+            voice_name: None,
+            ref_audio: None,
+            ref_text: None,
+            language: "en".to_string(),
+            model_size: None,
+        }
+    }
+}
+
+impl SidecarTtsConfig {
+    pub fn from_json_lossy(raw: &str) -> Option<Self> {
+        let enabled = extract_bool_value(raw, "sidecar_tts_enabled").unwrap_or(false);
+        let mentions = raw.contains("sidecar_tts_");
+        if !enabled && !mentions {
+            return None;
+        }
+        let mut cfg = Self::default();
+        cfg.enabled = enabled;
+        if let Some(ep) = extract_string_value(raw, "sidecar_tts_endpoint") {
+            cfg.endpoint = ep;
+        }
+        if let Some(e) = extract_string_value(raw, "sidecar_tts_engine") {
+            cfg.engine = e;
+        }
+        if let Some(v) = extract_string_value(raw, "sidecar_tts_voice_name") {
+            cfg.voice_name = Some(v);
+        }
+        if let Some(a) = extract_string_value(raw, "sidecar_tts_ref_audio") {
+            cfg.ref_audio = Some(a);
+        }
+        if let Some(t) = extract_string_value(raw, "sidecar_tts_ref_text") {
+            cfg.ref_text = Some(t);
+        }
+        if let Some(l) = extract_string_value(raw, "sidecar_tts_language") {
+            cfg.language = l;
+        }
+        if let Some(s) = extract_string_value(raw, "sidecar_tts_model_size") {
+            cfg.model_size = Some(s);
+        }
+        Some(cfg)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub source_language: String,
@@ -335,6 +405,7 @@ pub struct EngineConfig {
     pub cosyvoice_tts: Option<CosyVoiceTtsConfig>,
     pub elevenlabs_tts: Option<ElevenLabsTtsConfig>,
     pub minimax_tts: Option<MiniMaxTtsConfig>,
+    pub sidecar_tts: Option<SidecarTtsConfig>,
     pub mode: EngineMode,
     pub raw_config_json: String,
 }
@@ -359,6 +430,7 @@ impl Default for EngineConfig {
             cosyvoice_tts: None,
             elevenlabs_tts: None,
             minimax_tts: None,
+            sidecar_tts: None,
             mode: EngineMode::Bypass,
             raw_config_json: "{}".to_string(),
         }
@@ -434,6 +506,9 @@ impl EngineConfig {
         }
         if let Some(minimax_tts) = MiniMaxTtsConfig::from_json_lossy(raw) {
             config.minimax_tts = Some(minimax_tts);
+        }
+        if let Some(sidecar_tts) = SidecarTtsConfig::from_json_lossy(raw) {
+            config.sidecar_tts = Some(sidecar_tts);
         }
 
         config
