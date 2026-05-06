@@ -57,6 +57,24 @@ struct ContentView: View {
                         }
                         Slider(value: $viewModel.limiterThresholdDB, in: -18 ... -1, step: 0.5)
                     }
+                    Text("Input Devices")
+                        .font(.subheadline.bold())
+
+                    ForEach(viewModel.devices) { device in
+                        HStack {
+                            Text(device.name)
+                            Spacer()
+                            if viewModel.selectedDeviceID == device.id {
+                                Text("Selected")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.selectDevice(device)
+                        }
+                    }
+
                     Button("Refresh Devices") {
                         viewModel.refreshDevices()
                     }
@@ -393,23 +411,6 @@ struct ContentView: View {
                             Text("Install: ./scripts/install_tts_sidecar_deps.sh (--mlx for Apple Silicon)")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Section("Input Devices") {
-                    ForEach(viewModel.devices) { device in
-                        HStack {
-                            Text(device.name)
-                            Spacer()
-                            if viewModel.selectedDeviceID == device.id {
-                                Text("Selected")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.selectDevice(device)
                         }
                     }
                 }
