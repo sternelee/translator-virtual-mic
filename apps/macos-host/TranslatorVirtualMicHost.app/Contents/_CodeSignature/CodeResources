@@ -6,14 +6,14 @@
 	<dict/>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/libengine_api.dylib</key>
+		<key>Frameworks/libengine_api.dylib</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			la6Y3S2KwSeQYGL+HgpF4a5RfKA=
+			lEX11pgLXZw4kEexw/qJfXdfQUM=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"95ae98dd2d8ac127906062fe1e0a45e1ae517ca0"</string>
+			<string>cdhash H"9445f5d6980b5d9c389047b1c3fa897d775f4143"</string>
 		</dict>
 	</dict>
 	<key>rules</key>

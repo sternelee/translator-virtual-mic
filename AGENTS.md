@@ -4,7 +4,7 @@
 
 macOS-first realtime speech translation virtual microphone prototype. Rust engine exposes a C ABI for Swift interop.
 
-Core crates under `crates/`:
+Core crates under `crates/` (14 crates):
 - `engine-api` — C ABI cdylib for Swift interop
 - `session-core` — central runtime, ring buffers, mode behavior, metrics, shared output wiring
 - `audio-core` — audio processing primitives
@@ -15,6 +15,10 @@ Core crates under `crates/`:
 - `stt-local` — local STT/VAD via sherpa-onnx
 - `mt-client` — HTTP MT client (OpenAI-compatible endpoint)
 - `mt-local` — local MT via ONNX runtime
+- `tts-cosyvoice` — CosyVoice 2 HTTP client
+- `tts-elevenlabs` — ElevenLabs HTTP client
+- `tts-minimax` — MiniMax HTTP client
+- `tts-sidecar` — voicebox unified TTS HTTP client
 
 SwiftUI host app: `apps/macos-host/`. Audio Server Plug-in (ObjC++): `native/macos/virtual-mic-plugin/Sources/`. HAL smoke verifier: `native/macos/hal-smoke-verifier/`.
 
@@ -178,7 +182,7 @@ export MT_API_KEY_ENV=OPENAI_API_KEY               # optional
 - Bluetooth headset input (with sample-rate adaptation): working
 - Local caption pipeline (`EngineMode::CaptionOnly`): VAD + streaming partial/final STT + MT + TTS implemented via `caption_pipeline.rs`
 - Cloud translation bridges: `azure_voice_live` and `openai_realtime` exist in `session-core`
-- `cargo check`, `cargo test --workspace`: passing
+- `cargo check`, `cargo test --workspace`: **79 tests passing**
 
 **Deferred / not production-validated**: end-to-end cloud provider live sessions, production lock-free buffers, conferencing app validation.
 
@@ -212,4 +216,4 @@ print(f'write={wi} read={ri} samples={[round(x,4) for x in s]}')
 
 - Short imperative subject: `Fix shared-buffer read-head alignment`
 - PRs: list affected areas (`crates/engine-api`, `native/macos/virtual-mic-plugin`, etc.), call out ABI changes, include logs/screenshots for HAL-facing work.
-- After HAL contract changes: reboot before running verifier.
+- After HAL contract changes: **reboot macOS** before running verifier.
