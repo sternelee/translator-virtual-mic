@@ -47,9 +47,9 @@ struct ContentView: View {
                                 .font(.caption)
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
+                                    RoundedRectangle(cornerRadius: 1)
                                         .fill(Color.secondary.opacity(0.2))
-                                    RoundedRectangle(cornerRadius: 2)
+                                    RoundedRectangle(cornerRadius: 1)
                                         .fill(inputLevelColor)
                                         .frame(width: max(0, geo.size.width * CGFloat(viewModel.inputLevel)))
                                 }
@@ -108,6 +108,7 @@ struct ContentView: View {
                                 .lineLimit(1)
                         }
                     }
+                    .padding(.horizontal, 12)
                 }
             }
         }
